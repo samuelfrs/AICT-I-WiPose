@@ -1,0 +1,33 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.ipynb_checkpoints
+.pytest_cache/
+.env
+venv/
+.venv/
+env/
+
+# Dataset & Data files (ignorar arquivos pesados)
+dataset/*
+!dataset/.gitkeep
+!dataset/README.md
+data/*
+!data/.gitkeep
+*.mat
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+*.h5
+*.hdf5
+*.npy
+*.npz
+
+# IDEs e Sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
