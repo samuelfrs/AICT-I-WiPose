@@ -1,0 +1,40 @@
+# ═══════════════════════════════════════════════════════════════════
+# NÚCLEO — necessário para rodar os scripts e os testes que já existem
+# ═══════════════════════════════════════════════════════════════════
+numpy>=1.26
+h5py>=3.10             # OBRIGATÓRIO: os .mat do Wi-Pose são v7.3 (HDF5).
+                       # scipy.io.loadmat NÃO abre esse formato.
+matplotlib>=3.8
+pytest>=8.0            # roda sobre as fixtures em tests/, sem o dataset completo
+
+# ── Processamento de sinais / RF (tarefa d) ──────────────────────
+scipy>=1.11            # filtragem (Butterworth, Hampel), análise espectral
+PyWavelets>=1.5        # denoising de CSI por wavelet
+statsmodels>=0.14      # análise espectral
+
+# ── Aprendizado de máquina (tarefa c) ────────────────────────────
+scikit-learn>=1.4      # baselines, SVM, Random Forest, métricas, splits por grupo
+pandas>=2.1
+
+# ── Visualização e notebooks ─────────────────────────────────────
+seaborn>=0.13
+plotly>=5.20           # visualização interativa do esqueleto 2D (18 juntas)
+jupyterlab>=4.1
+ipykernel>=6.29
+tqdm>=4.66
+pyyaml>=6.0
+
+# ═══════════════════════════════════════════════════════════════════
+# DEEP LEARNING — ainda NÃO usado por nenhum script deste repositório.
+# São ~2,5 GB de download. Instale só quando chegar a hora da CNN
+# (tarefa c, passo 5b do plano em docs/analise-inicial.md).
+#
+# NOTA: por padrão o PyPI entrega o torch CPU-only no Windows. Para usar
+# GPU NVIDIA, instale pelo índice CUDA do PyTorch ANTES do resto:
+#   pip install --index-url https://download.pytorch.org/whl/cu130 torch torchvision
+# (cu130 = CUDA 13.0; exige driver >= 580. GPUs Blackwell/RTX 50xx precisam
+#  de cu128 ou superior. Confira a sua com: nvidia-smi)
+# ═══════════════════════════════════════════════════════════════════
+torch>=2.2
+torchvision>=0.17
+einops>=0.7

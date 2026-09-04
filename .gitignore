@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -19,3 +19,15 @@ dataset/Wi-Pose*
 .idea/
 .DS_Store
 Thumbs.db
+# Ferramentas locais de IA — BMAD + Claude Code (uso pessoal nesta máquina)
+# Nada disso sobe: só código do projeto e o que já existia no clone.
+.claude/
+.claude-plugin/
+_bmad/
+_bmad-output/
+CLAUDE.md
+AGENTS.md
+.bmad-cache/
+
+# Saidas de execucao (figuras, metricas, checkpoints, cache de features)
+artifacts/
