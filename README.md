@@ -62,12 +62,27 @@ cópia.
 - **Winect:** Ren, Y., et al. *"Winect: 3D Human Pose Tracking for Free-form Activity Using Commodity WiFi."* IMWUT, 2021.
 - **CSI-Former:** Zhou, Y., et al. *"CSI-Former: Pay More Attention to Pose Estimation with WiFi."* Entropy 25(1):20, 2023 — **o artigo que publica o dataset que usamos**.
 
+## 🔍 Como Inspecionar Amostras (Tarefa b)
+
+Para carregar uma amostra `.mat`, extrair o CSI e visualizar graficamente (com janela interativa ou salvando em imagem):
+
+```cmd
+# Salva o gráfico em arquivo:
+.venv\Scripts\python.exe scripts\inspecionar.py --arquivo "dataset\Wi-Pose\Wi-Pose\Test\bend_009-frame001.mat" --salvar docs/inspecao_amostra.png
+
+# Abre a janela interativa do Matplotlib na tela:
+.venv\Scripts\python.exe scripts\inspecionar.py --mostrar
+```
+
 ## 🗂️ Estrutura
 
 ```
 AICT-I-WiPose/
 ├── Artigos/          Artigos de referência em PDF
 ├── dataset/          Dataset local (ignorado no Git) — ver dataset/README.md
+├── docs/             Documentações e figuras geradas (inspecao_amostra.png)
+├── scripts/          Scripts executáveis da CLI (inspecionar.py)
+├── src/              Módulos de dados e visualização (dados.py, visualizacao.py)
 ├── tema.pdf          Proposta da disciplina
 └── requirements.txt
 ```
