@@ -29,5 +29,13 @@ CLAUDE.md
 AGENTS.md
 .bmad-cache/
 
-# Saidas de execucao (figuras, metricas, checkpoints, cache de features)
-artifacts/
+# Saidas de execucao. As FIGURAS sao versionadas (entram no relatorio);
+# cache, checkpoints e features derivadas, nao.
+artifacts/*
+!artifacts/figuras/
+artifacts/figuras/*
+!artifacts/figuras/*.png
+
+# Dataset MM-Fi (16 GB de wifi-csi) — cada integrante baixa a propria copia
+MMFi_Dataset/
+*.npy

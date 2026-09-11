@@ -8,18 +8,15 @@ Processar sinais de rádio (CSI de WiFi) e treinar um modelo capaz de **classifi
 movimentos corporais sem câmera** — a partir apenas de como o corpo humano
 deforma o sinal WiFi ao se mover pelo ambiente.
 
-> ### ⚠️ Duas coisas importantes antes de começar
+> ### 📌 Trocamos de dataset em 10/09/2026
 >
-> **1. O dataset não é o dos artigos.** Existem duas coisas chamadas "Wi-Pose": o
-> artigo do MobiCom 2020 (SUNY Buffalo) e o dataset
-> [NjtechCVLab/Wi-PoseDataset](https://github.com/NjtechCVLab/Wi-PoseDataset)
-> (Nanjing Tech), que é o que usamos. O dataset foi publicado por outro artigo, o
-> **CSI-Former** (Entropy, 2023).
+> O projeto começou com o [Wi-PoseDataset](https://github.com/NjtechCVLab/Wi-PoseDataset),
+> mas ele só distribui **amplitude** (sem fase) e anotação **2D** — o que deixava
+> as tarefas (b) e (d) do enunciado sem objeto.
 >
-> **2. Não dá para fazer pose 3D com este dataset.** As anotações vêm do AlphaPose
-> sobre vídeo comum, então são **2D**. E o CSI distribuído traz **apenas a
-> amplitude** do sinal, sem a fase. O escopo viável é **classificação de ações** e,
-> opcionalmente, regressão de pose 2D.
+> Agora usamos o **[MM-Fi](https://github.com/ybhbingo/MMFi_dataset)** (NeurIPS 2023),
+> que tem **fase do sinal**, **pose 3D**, 114 subportadoras, 27 ações, 40 sujeitos
+> e 4 ambientes. O porquê da troca está em [`docs/analise-mmfi.md`](docs/analise-mmfi.md).
 
 ## 📋 Tarefas do projeto
 
@@ -43,24 +40,41 @@ pip install -r requirements.txt
 
 <sub>Git Bash: `source .venv/Scripts/activate` — PowerShell: `.venv\Scripts\Activate.ps1`</sub>
 
-## 💾 Dataset
+## 💾 Dataset — MM-Fi
 
-[Wi-PoseDataset](https://github.com/NjtechCVLab/Wi-PoseDataset) — 166.600 pacotes
-`.mat` com CSI de 5 GHz e anotações de 18 pontos do esqueleto, para 12 ações
-executadas por 12 voluntários.
+[MM-Fi](https://github.com/ybhbingo/MMFi_dataset) — 1.080 sequências de 297 quadros
+(320.760 no total), com CSI de WiFi 5 GHz (amplitude **e fase**, 114 subportadoras,
+3 antenas) e pose **3D** de 17 juntas, para 27 ações de 40 voluntários em 4 ambientes.
 
-Instruções de download e instalação em [`dataset/README.md`](dataset/README.md).
-**Leia esse arquivo antes de escrever código**: o README oficial do dataset
-descreve variáveis que não existem no pacote distribuído.
+Só a modalidade `wifi-csi` já são ~16 GB, então o dataset **não é versionado**.
+Cada integrante baixa a própria cópia e aponta o caminho:
 
-O dataset **não é versionado** (2,4 GB extraído). Cada integrante baixa a própria
-cópia.
+```cmd
+set MMFI_DATASET=C:\caminho\para\MMFi_Dataset
+```
+
+<sub>Git Bash: `export MMFI_DATASET=/c/caminho/para/MMFi_Dataset` — PowerShell: `$env:MMFI_DATASET="..."`</sub>
+
+Sem a variável, o código procura em `~/Downloads/datas/MMFi_Dataset`.
+
+O `dataset/` na raiz e o [`dataset/README.md`](dataset/README.md) são do Wi-Pose,
+da primeira fase.
+
+## 📖 Documentação
+
+| Documento | Para quê |
+| --- | --- |
+| [`docs/analise-mmfi.md`](docs/analise-mmfi.md) | **Comece por aqui.** O que o MM-Fi entrega, riscos metodológicos e caminhos possíveis. |
+| [`docs/replicar-mmfi.md`](docs/replicar-mmfi.md) | Como replicar o baseline publicado, e o que já vem pronto no toolbox oficial. |
+| [`docs/guia-do-projeto.md`](docs/guia-do-projeto.md) | Explicação do projeto do zero (escrito na fase Wi-Pose). |
+| [`docs/analise-inicial.md`](docs/analise-inicial.md) | Análise do Wi-Pose — documenta por que trocamos de dataset. |
 
 ## 📚 Artigos de Referência
 
+- **MM-Fi:** Yang, J., et al. *"MM-Fi: Multi-Modal Non-Intrusive 4D Human Dataset for Versatile Wireless Sensing."* NeurIPS 2023 — **o dataset que usamos**.
 - **Wi-Pose:** Jiang, W., et al. *"Towards 3D human pose construction using WiFi."* MobiCom, 2020.
 - **Winect:** Ren, Y., et al. *"Winect: 3D Human Pose Tracking for Free-form Activity Using Commodity WiFi."* IMWUT, 2021.
-- **CSI-Former:** Zhou, Y., et al. *"CSI-Former: Pay More Attention to Pose Estimation with WiFi."* Entropy 25(1):20, 2023 — **o artigo que publica o dataset que usamos**.
+- **MetaFi++:** Zhou, Y., et al. *"WiFi-Enabled Transformer-Based Human Pose Estimation."* IEEE IoT Journal, 2023 — baseline de WiFi do MM-Fi.
 
 ## 🔍 Como Inspecionar Amostras (Tarefa b)
 
