@@ -6,8 +6,10 @@ Divididos em dois grupos:
 * Os que **não precisam do dataset** — validação de argumentos, constantes do
   esqueleto e o comportamento de ``sanitizar_fase`` sobre sinal sintético. Rodam
   em qualquer máquina logo após clonar o repositório.
-* Os marcados com ``@pytest.mark.dataset`` — precisam do MM-Fi em disco e são
-  pulados automaticamente se ele não estiver lá.
+* Os marcados com ``@precisa_dataset`` — precisam do MM-Fi em disco, em qualquer
+  um dos dois formatos, e são pulados se ele não estiver lá.
+* Os marcados com ``@precisa_original`` — leem os ``.mat`` direto, então só
+  rodam sobre a árvore original, não sobre a versão leve.
 
 A ideia é testar **valores**, não formas: conferir ``csi.shape == (3,114,10)``
 usando as mesmas constantes do módulo não detecta eixo trocado. Onde importa, os
@@ -39,13 +41,22 @@ from src.mmfi import (  # noqa: E402
     caminho_sequencia,
     carregar_pose_sequencia,
     carregar_quadro,
+    formato_disponivel,
     sanitizar_fase,
 )
 
-TEM_DATASET = (caminho_dataset() / "E01" / "S01" / "A01").is_dir()
+# A guarda usa formato_disponivel de propósito: checar se "A01" é diretório
+# funcionaria só no formato original — na versão leve A01.npz é um arquivo, e
+# todos estes testes pulariam em silêncio.
+_FORMATO = formato_disponivel("S01", "A01")
+
 precisa_dataset = pytest.mark.skipif(
-    not TEM_DATASET,
+    _FORMATO == "ausente",
     reason="MM-Fi não encontrado. Aponte a variável de ambiente MMFI_DATASET.",
+)
+precisa_original = pytest.mark.skipif(
+    _FORMATO != "original",
+    reason=f"lê .mat direto; formato disponível: {_FORMATO}",
 )
 
 
@@ -261,7 +272,7 @@ def test_quadro_fora_do_intervalo_falha():
             carregar_quadro("S01", "A01", ruim)
 
 
-@precisa_dataset
+@precisa_original
 def test_amplitude_bate_com_a_leitura_direta_do_arquivo():
     """Compara contra scipy.io.loadmat cru, para pegar transposição ou reshape
     que embaralhe os eixos sem levantar exceção."""
@@ -275,7 +286,7 @@ def test_amplitude_bate_com_a_leitura_direta_do_arquivo():
     assert np.allclose(fase, bruto["CSIphase"].astype(np.float32))
 
 
-@precisa_dataset
+@precisa_original
 def test_nao_finitos_sao_corrigidos_sem_tocar_nos_valores_validos():
     """E01/S10/A03/frame042 tem um -inf conhecido em CSIamp."""
     import scipy.io as sio
