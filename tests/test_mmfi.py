@@ -160,6 +160,76 @@ def test_sanitizar_rejeita_tensor_com_dimensao_errada():
 
 
 # ==========================================================================
+# Sem dataset — formato leve (.npz por sequência)
+# ==========================================================================
+
+@pytest.fixture
+def pacote_falso(tmp_path):
+    """Monta um dataset mínimo no formato leve, com valores reconhecíveis.
+
+    Cada quadro recebe um valor distinto, para que um erro de indexação (o
+    clássico off-by-one entre quadro 1-based e índice 0-based) apareça.
+    """
+    destino = tmp_path / "E01" / "S01"
+    destino.mkdir(parents=True)
+
+    quadros = np.arange(N_QUADROS, dtype=np.float32)[:, None, None, None]
+    np.savez_compressed(
+        destino / "A01.npz",
+        csi_amp=np.broadcast_to(quadros, (N_QUADROS, 3, 114, 10)).copy(),
+        csi_fase=np.broadcast_to(-quadros, (N_QUADROS, 3, 114, 10)).copy(),
+        pose=np.broadcast_to(quadros[:, :, :, 0], (N_QUADROS, 17, 3)).copy(),
+    )
+    return tmp_path
+
+
+def test_formato_leve_e_detectado(pacote_falso):
+    from src.mmfi import formato_disponivel
+
+    assert formato_disponivel("S01", "A01", pacote_falso) == "pacote"
+    assert formato_disponivel("S01", "A02", pacote_falso) == "ausente"
+
+
+def test_carregar_quadro_le_o_formato_leve_com_indice_certo(pacote_falso):
+    for quadro in (1, 150, N_QUADROS):
+        amplitude, fase, juntas, meta = carregar_quadro(
+            "S01", "A01", quadro, pacote_falso
+        )
+        esperado = float(quadro - 1)  # quadro 1-based -> índice 0-based
+        assert amplitude.min() == amplitude.max() == esperado
+        assert fase.min() == fase.max() == -esperado
+        assert juntas.min() == juntas.max() == esperado
+        assert meta["formato"] == "pacote"
+
+
+def test_sequencia_inteira_bate_com_a_leitura_quadro_a_quadro(pacote_falso):
+    from src.mmfi import carregar_csi_sequencia
+
+    amplitude, fase = carregar_csi_sequencia("S01", "A01", pacote_falso)
+    assert amplitude.shape == (N_QUADROS, 3, 114, 10)
+
+    for quadro in (1, 42, N_QUADROS):
+        a_um, f_um, _, _ = carregar_quadro("S01", "A01", quadro, pacote_falso)
+        assert np.allclose(amplitude[quadro - 1], a_um)
+        assert np.allclose(fase[quadro - 1], f_um)
+
+
+def test_pose_da_sequencia_vem_do_pacote(pacote_falso):
+    poses = carregar_pose_sequencia("S01", "A01", pacote_falso)
+    assert poses.shape == (N_QUADROS, 17, 3)
+    assert poses[0].max() == 0.0 and poses[-1].max() == float(N_QUADROS - 1)
+
+
+def test_pacote_corrompido_falha_com_mensagem_util(tmp_path):
+    destino = tmp_path / "E01" / "S01"
+    destino.mkdir(parents=True)
+    (destino / "A01.npz").write_bytes(b"isto nao e um npz")
+
+    with pytest.raises(ValueError, match="Falha ao ler"):
+        carregar_quadro("S01", "A01", 1, tmp_path)
+
+
+# ==========================================================================
 # Com dataset
 # ==========================================================================
 
@@ -252,3 +322,56 @@ def test_juntas_esquerda_e_direita_nao_estao_trocadas():
     alcance_esq = poses[:, 13, 1].min()
     alcance_dir = poses[:, 16, 1].min()
     assert alcance_esq < alcance_dir, "punho esquerdo deveria subir mais em A13"
+
+
+def test_pacote_quebrado_nao_sombreia_os_mat_originais(tmp_path):
+    """Com os dois formatos no disco, um .npz ilegível deve cair para os .mat.
+
+    Sem isso, um arquivo sendo gravado agora — ou truncado num download — faz
+    toda leitura falhar, mesmo com a árvore original íntegra ao lado.
+    """
+    from src.mmfi import formato_disponivel
+
+    pasta = tmp_path / "E01" / "S01" / "A01" / "wifi-csi"
+    pasta.mkdir(parents=True)
+    (pasta / "frame001.mat").write_bytes(b"")  # basta o diretório existir
+
+    assert formato_disponivel("S01", "A01", tmp_path) == "original"
+
+    quebrado = tmp_path / "E01" / "S01" / "A01.npz"
+    quebrado.write_bytes(b"nao sou um zip")
+    with pytest.warns(UserWarning, match="ilegível ou incompleto"):
+        assert formato_disponivel("S01", "A01", tmp_path) == "original"
+
+
+def test_diretorio_com_nome_de_npz_nao_e_confundido_com_pacote(tmp_path):
+    (tmp_path / "E01" / "S01" / "A01.npz").mkdir(parents=True)
+    from src.mmfi import formato_disponivel
+
+    assert formato_disponivel("S01", "A01", tmp_path) == "ausente"
+
+
+def test_csi_de_sequencia_recusa_contagem_errada_de_quadros(tmp_path):
+    """Um buraco na numeração desalinharia tudo contra pose[quadro-1]."""
+    from src.mmfi import carregar_csi_sequencia
+
+    pasta = tmp_path / "E01" / "S01" / "A01" / "wifi-csi"
+    pasta.mkdir(parents=True)
+    for n in (1, 2, 3):
+        (pasta / f"frame{n:03d}.mat").write_bytes(b"")
+
+    with pytest.raises(ValueError, match="esperado 297 arquivos"):
+        carregar_csi_sequencia("S01", "A01", tmp_path)
+
+
+def test_pose_de_sequencia_truncada_falha_com_mensagem_clara(tmp_path):
+    destino = tmp_path / "E01" / "S01"
+    destino.mkdir(parents=True)
+    np.savez_compressed(
+        destino / "A01.npz",
+        csi_amp=np.zeros((N_QUADROS, 3, 114, 10), dtype=np.float32),
+        csi_fase=np.zeros((N_QUADROS, 3, 114, 10), dtype=np.float32),
+        pose=np.zeros((100, 17, 3), dtype=np.float32),  # truncada
+    )
+    with pytest.raises(ValueError, match="pose com forma"):
+        carregar_pose_sequencia("S01", "A01", tmp_path)

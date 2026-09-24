@@ -12,7 +12,7 @@ Estrutura do dataset
         wifi-csi/frameNNN.mat CSI de 100 ms: CSIamp e CSIphase, ambos (3, 114, 10)
 
 ⚠️ ``CSIamp`` está em **escala logarítmica (dB)**, não linear. A faixa observada é
-de ~7 a ~51, e os ``-inf`` que aparecem em ~5% dos arquivos são o resultado de
+de ~7 a ~51, e os ``-inf`` que aparecem em ~6% dos quadros são o resultado de
 ``log10(0)``. Não aplique log de novo.
 
 São 4 ambientes x 10 sujeitos x 27 ações = 1.080 sequências, 297 quadros cada.
@@ -23,7 +23,10 @@ Diferenças em relação ao Wi-Pose (importantes)
 - ✅ **Existe fase** (``CSIphase``), crua e envolvida em ±π.
 - A pose é **3D**, em **metros**, com 17 juntas no padrão **Human3.6M** (não COCO).
 - ⚠️ O eixo **y cresce para baixo** — a cabeça tem y negativo.
-- ⚠️ Cerca de 3% dos arquivos têm ``-inf`` em ``CSIamp``; tratamos aqui.
+- ⚠️ Cerca de 6% dos quadros têm ``-inf`` em ``CSIamp``; tratamos aqui.
+- O loader aceita **dois layouts**: a árvore original de ``.mat`` e a versão
+  leve gerada por ``scripts/empacotar_mmfi.py`` (um ``.npz`` por sequência).
+  Ver :func:`formato_disponivel` — a detecção é automática.
 """
 
 import re
@@ -147,6 +150,51 @@ def caminho_sequencia(
     return caminho_dataset(raiz) / ambiente_do_sujeito(sujeito) / sujeito / acao
 
 
+def caminho_pacote(
+    sujeito: str, acao: str, raiz: Optional[Union[str, Path]] = None
+) -> Path:
+    """Arquivo da sequência no formato leve, ex.: .../E01/S01/A01.npz."""
+    if acao not in ACOES:
+        raise ValueError(f"Ação desconhecida: {acao!r}. Esperado A01..A27.")
+    return caminho_dataset(raiz) / ambiente_do_sujeito(sujeito) / sujeito / f"{acao}.npz"
+
+
+def formato_disponivel(
+    sujeito: str, acao: str, raiz: Optional[Union[str, Path]] = None
+) -> str:
+    """Descobre em qual dos dois formatos a sequência está no disco.
+
+    Devolve ``"pacote"`` (versão leve, um .npz por sequência), ``"original"``
+    (árvore de .mat do MM-Fi) ou ``"ausente"``.
+
+    O pacote tem prioridade: se os dois existirem, ler um arquivo só é bem mais
+    rápido que abrir 297.
+
+    ⚠️ A checagem exige ``is_file()``, e não só ``exists()``: um diretório
+    chamado ``A01.npz`` faria toda leitura falhar em vez de cair para os ``.mat``.
+    Um ``.npz`` ainda sendo gravado, ou truncado, também não deve sombrear uma
+    árvore original íntegra ao lado.
+    """
+    pacote = caminho_pacote(sujeito, acao, raiz)
+    tem_original = (caminho_sequencia(sujeito, acao, raiz) / "wifi-csi").is_dir()
+
+    if pacote.is_file():
+        if not tem_original:
+            return "pacote"
+        # Com os dois formatos no disco, só preferimos o pacote se ele abrir.
+        try:
+            with np.load(pacote) as dados:
+                if {"csi_amp", "csi_fase", "pose"} <= set(dados.files):
+                    return "pacote"
+        except Exception:
+            pass
+        warnings.warn(
+            f"{pacote.name} está ilegível ou incompleto; usando os .mat originais.",
+            stacklevel=2,
+        )
+    return "original" if tem_original else "ausente"
+
+
 # ---------------------------------------------------------------------------
 # Carregamento
 # ---------------------------------------------------------------------------
@@ -174,6 +222,71 @@ def _tratar_nao_finitos(amplitude: np.ndarray) -> Tuple[np.ndarray, int]:
             # Se a fatia inteira for inválida, zera — melhor que propagar NaN.
             fatia[mascara] = bons.mean() if bons.size else 0.0
     return amplitude, n_ruins
+
+
+def _validar_poses(poses: np.ndarray, nome: str) -> None:
+    """Confere a forma da sequência inteira de pose.
+
+    Sem isto, um ground truth truncado só apareceria como ``IndexError`` cru ao
+    pedir um quadro alto — e nos scripts isso escapa como traceback em vez de
+    mensagem útil.
+    """
+    esperado = (N_QUADROS, N_JUNTAS, 3)
+    if poses.shape != esperado:
+        raise ValueError(f"{nome}: pose com forma {poses.shape}, esperado {esperado}.")
+
+
+def _ler_do_original(
+    sujeito: str, acao: str, quadro: int, raiz: Optional[Union[str, Path]]
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Lê um quadro da árvore original do MM-Fi (297 .mat por sequência)."""
+    pasta = caminho_sequencia(sujeito, acao, raiz)
+    arquivo_csi = pasta / "wifi-csi" / f"frame{quadro:03d}.mat"
+    arquivo_gt = pasta / "ground_truth.npy"
+
+    if not arquivo_csi.exists():
+        raise FileNotFoundError(f"CSI não encontrado: {arquivo_csi}")
+    if not arquivo_gt.exists():
+        raise FileNotFoundError(
+            f"Ground truth não encontrado: {arquivo_gt}\n"
+            "A sequência existe mas está incompleta — confira a extração."
+        )
+
+    try:
+        dados = sio.loadmat(arquivo_csi)
+        amplitude = np.asarray(dados["CSIamp"])
+        fase = np.asarray(dados["CSIphase"])
+    except Exception as erro:  # arquivo truncado, corrompido ou sem as variáveis
+        raise ValueError(f"Falha ao ler {arquivo_csi.name}: {erro}") from erro
+
+    # O ground truth traz a sequência inteira; o índice é 0-based, enquanto os
+    # quadros do dataset são 1-based.
+    poses = np.load(arquivo_gt)
+    _validar_poses(poses, arquivo_gt.name)
+    return amplitude, fase, poses[quadro - 1]
+
+
+def _ler_do_pacote(
+    sujeito: str, acao: str, quadro: int, raiz: Optional[Union[str, Path]]
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Lê um quadro da versão leve (um .npz por sequência).
+
+    O ``.npz`` é um zip: indexar ``pacote["csi_amp"][quadro - 1]`` descomprime o
+    array inteiro da sequência. Para varrer muitos quadros da mesma sequência,
+    use :func:`carregar_csi_sequencia`, que paga isso uma vez só.
+    """
+    arquivo = caminho_pacote(sujeito, acao, raiz)
+    try:
+        with np.load(arquivo) as pacote:
+            _validar_poses(pacote["pose"], arquivo.name)
+            amplitude = pacote["csi_amp"][quadro - 1]
+            fase = pacote["csi_fase"][quadro - 1]
+            juntas = pacote["pose"][quadro - 1]
+    except (ValueError, KeyError) as erro:
+        raise ValueError(f"Falha ao ler {arquivo.name}: {erro}") from erro
+    except Exception as erro:
+        raise ValueError(f"Falha ao ler {arquivo.name}: {erro}") from erro
+    return amplitude, fase, juntas
 
 
 def carregar_quadro(
@@ -206,49 +319,34 @@ def carregar_quadro(
     if not 1 <= quadro <= N_QUADROS:
         raise ValueError(f"Quadro fora do intervalo 1..{N_QUADROS}: {quadro}")
 
-    pasta = caminho_sequencia(sujeito, acao, raiz)
-    arquivo_csi = pasta / "wifi-csi" / f"frame{quadro:03d}.mat"
-    arquivo_gt = pasta / "ground_truth.npy"
-
-    if not arquivo_csi.exists():
+    formato = formato_disponivel(sujeito, acao, raiz)
+    if formato == "ausente":
         raise FileNotFoundError(
-            f"CSI não encontrado: {arquivo_csi}\n"
+            f"Sequência {sujeito}/{acao} não encontrada em {caminho_dataset(raiz)}\n"
             "Confira o caminho do dataset (variável de ambiente MMFI_DATASET)."
         )
 
-    if not arquivo_gt.exists():
-        raise FileNotFoundError(
-            f"Ground truth não encontrado: {arquivo_gt}\n"
-            "A sequência existe mas está incompleta — confira a extração."
-        )
-
-    try:
-        dados = sio.loadmat(arquivo_csi)
-        amplitude_bruta = np.asarray(dados["CSIamp"])
-        fase = np.asarray(dados["CSIphase"])
-    except Exception as erro:  # arquivo truncado, corrompido ou sem as variáveis
-        raise ValueError(f"Falha ao ler {arquivo_csi.name}: {erro}") from erro
+    if formato == "pacote":
+        amplitude_bruta, fase, juntas = _ler_do_pacote(sujeito, acao, quadro, raiz)
+    else:
+        amplitude_bruta, fase, juntas = _ler_do_original(sujeito, acao, quadro, raiz)
 
     forma_csi = (N_ANTENAS, N_SUBPORTADORAS, N_TEMPO)
     if amplitude_bruta.shape != forma_csi or fase.shape != forma_csi:
         raise ValueError(
-            f"{arquivo_csi.name}: esperado CSI {forma_csi}, obtido "
+            f"{sujeito}/{acao}/quadro {quadro}: esperado CSI {forma_csi}, obtido "
             f"amp={amplitude_bruta.shape} fase={fase.shape}."
+        )
+    if juntas.shape != (N_JUNTAS, 3):
+        raise ValueError(
+            f"{sujeito}/{acao}/quadro {quadro}: esperado pose {(N_JUNTAS, 3)}, "
+            f"obtido {juntas.shape}."
         )
 
     amplitude, n_corrigidos = _tratar_nao_finitos(amplitude_bruta)
 
-    # O ground truth vem com a sequência inteira num arquivo só; o índice é
-    # 0-based, enquanto os quadros do dataset são 1-based.
-    poses = np.load(arquivo_gt)
-    if poses.shape != (N_QUADROS, N_JUNTAS, 3):
-        raise ValueError(
-            f"{arquivo_gt.name}: esperado {(N_QUADROS, N_JUNTAS, 3)}, "
-            f"obtido {poses.shape}."
-        )
-    juntas = poses[quadro - 1]
-
     meta = {
+        "formato": formato,
         "sujeito": sujeito,
         "acao": acao,
         "nome_acao": ACOES[acao],
@@ -271,10 +369,79 @@ def carregar_pose_sequencia(
 ) -> np.ndarray:
     """Pose 3D da sequência inteira: ``(297, 17, 3)``.
 
-    Barato — é um único ``.npy`` de ~60 KB. Útil para animar o movimento sem
-    precisar abrir os 297 arquivos de CSI.
+    Barato nos dois formatos: no original é um ``.npy`` de ~60 KB; no pacote, o
+    ``.npz`` descomprime só o array pedido.
     """
-    return np.load(caminho_sequencia(sujeito, acao, raiz) / "ground_truth.npy")
+    if formato_disponivel(sujeito, acao, raiz) == "pacote":
+        arquivo = caminho_pacote(sujeito, acao, raiz)
+        try:
+            with np.load(arquivo) as pacote:
+                poses = pacote["pose"]
+        except Exception as erro:
+            raise ValueError(f"Falha ao ler {arquivo.name}: {erro}") from erro
+    else:
+        arquivo = caminho_sequencia(sujeito, acao, raiz) / "ground_truth.npy"
+        poses = np.load(arquivo)
+
+    _validar_poses(poses, arquivo.name)
+    return poses
+
+
+def carregar_csi_sequencia(
+    sujeito: str,
+    acao: str,
+    raiz: Optional[Union[str, Path]] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """CSI da sequência inteira: ``(297, 3, 114, 10)`` para amplitude e fase.
+
+    Use isto em vez de chamar :func:`carregar_quadro` num laço: no formato leve,
+    cada chamada descomprimiria o array inteiro de novo; no original, abriria os
+    297 arquivos um a um.
+
+    A amplitude já vem com os valores não-finitos tratados, quadro a quadro.
+    """
+    if formato_disponivel(sujeito, acao, raiz) == "pacote":
+        arquivo = caminho_pacote(sujeito, acao, raiz)
+        try:
+            with np.load(arquivo) as pacote:
+                amplitude = pacote["csi_amp"].astype(np.float32)
+                fase = pacote["csi_fase"].astype(np.float32)
+        except Exception as erro:
+            raise ValueError(f"Falha ao ler {arquivo.name}: {erro}") from erro
+
+        esperado = (N_QUADROS, N_ANTENAS, N_SUBPORTADORAS, N_TEMPO)
+        if amplitude.shape != esperado or fase.shape != esperado:
+            raise ValueError(
+                f"{arquivo.name}: CSI com forma amp={amplitude.shape} "
+                f"fase={fase.shape}, esperado {esperado}."
+            )
+    else:
+        pasta = caminho_sequencia(sujeito, acao, raiz) / "wifi-csi"
+        arquivos = sorted(pasta.glob("frame*.mat"))
+        if len(arquivos) != N_QUADROS:
+            # Um buraco na numeração desalinharia tudo contra pose[quadro-1],
+            # porque a posição na lista deixa de ser o número do quadro.
+            raise ValueError(
+                f"{pasta}: esperado {N_QUADROS} arquivos, encontrei {len(arquivos)}."
+            )
+        forma_quadro = (N_ANTENAS, N_SUBPORTADORAS, N_TEMPO)
+        amplitude = np.empty((N_QUADROS,) + forma_quadro, dtype=np.float32)
+        fase = np.empty_like(amplitude)
+        for i, arquivo in enumerate(arquivos):
+            dados = sio.loadmat(arquivo)
+            # A atribuição faria broadcast em silêncio se a forma divergisse —
+            # um (3,114,1) degenerado seria replicado pelos 10 instantes.
+            if dados["CSIamp"].shape != forma_quadro:
+                raise ValueError(
+                    f"{arquivo.name}: CSI com forma {dados['CSIamp'].shape}, "
+                    f"esperado {forma_quadro}."
+                )
+            amplitude[i] = dados["CSIamp"]
+            fase[i] = dados["CSIphase"]
+
+    for i in range(len(amplitude)):
+        amplitude[i], _ = _tratar_nao_finitos(amplitude[i])
+    return amplitude, fase
 
 
 # ---------------------------------------------------------------------------

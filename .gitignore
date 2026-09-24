@@ -36,6 +36,9 @@ artifacts/*
 artifacts/figuras/*
 !artifacts/figuras/*.png
 
-# Dataset MM-Fi (16 GB de wifi-csi) — cada integrante baixa a propria copia
+# Dataset MM-Fi — cada integrante baixa a propria copia. Nem o original nem a
+# versao leve gerada por scripts/empacotar_mmfi.py entram no repositorio.
 MMFi_Dataset/
+MMFi_leve/
 *.npy
+*.npz
