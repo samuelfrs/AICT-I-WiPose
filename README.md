@@ -148,6 +148,7 @@ Cada integrante baixa a própria cópia pelo
 
 | Documento | Para quê |
 | --- | --- |
+| [`docs/resumo-do-projeto.md`](docs/resumo-do-projeto.md) | **Visão geral rápida:** objetivo, o que o professor pede, o que já foi feito, resultados e próximos passos. |
 | [`docs/analise-mmfi.md`](docs/analise-mmfi.md) | **Comece por aqui.** O que o MM-Fi entrega, riscos metodológicos e caminhos possíveis. |
 | [`docs/replicar-mmfi.md`](docs/replicar-mmfi.md) | Como replicar o baseline publicado, e o que já vem pronto no toolbox oficial. |
 | [`docs/guia-do-projeto.md`](docs/guia-do-projeto.md) | Explicação do projeto do zero, sem pressupor conhecimento prévio (escrito na fase Wi-Pose). |
