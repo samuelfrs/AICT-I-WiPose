@@ -114,7 +114,7 @@ e fase sanitizada (1.368 atributos).
   inteiro na RAM). As execuções seguintes o reaproveitam.
 - **Saídas:** com `<sufixo>` = `<protocolo>_<modelo>[_<acoes>]_j<janela>_p<passo>_seed<seed>`
   (`_<acoes>` só fora do P3), métricas em `artifacts/resultados/baseline_<sufixo>.json`
-  (não versionado) e as matrizes de confusão normalizadas em
+  (versionadas, para o relatório) e as matrizes de confusão normalizadas em
   `artifacts/figuras/confusao_<sufixo>.png` (por janela) e
   `artifacts/figuras/confusao_<sufixo>_seq.png` (por sequência).
 
