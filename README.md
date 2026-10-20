@@ -26,9 +26,9 @@ Conforme o `tema.pdf`:
 |---|---|---|
 | **a** | Revisão bibliográfica — Wi-Pose (atividades predefinidas) × Winect (free-form) | 🔲 |
 | **b** | Manipulação das estruturas de dados — carregar o CSI e plotar gráficos | 🟡 em andamento |
-| **c** | Classificação de movimentos — modelo de ML para discriminar as 27 ações | 🔲 |
+| **c** | Classificação de movimentos — modelo de ML para discriminar as 27 ações | 🟡 baseline RF/SVM implementado; rede neural pendente |
 | **d** | Pré-processamento e calibração — filtragem espacial e temporal, offsets de fase | 🟡 sanitização de fase implementada |
-| **e** | Análise crítica — matrizes de confusão, impacto de subportadoras ruidosas | 🔲 |
+| **e** | Análise crítica — matrizes de confusão, impacto de subportadoras ruidosas | 🟡 matriz de confusão do baseline |
 
 ## 🚀 Começando
 
@@ -84,6 +84,40 @@ As figuras saem em `artifacts/figuras/`:
 
 ![Exemplo de inspeção](artifacts/figuras/mmfi_amostra.png)
 
+## 🧠 Classificar as ações (Tarefa c)
+
+Baseline com **Random Forest** ou **SVM** sobre estatísticas do CSI em janelas de
+30 quadros (3 s): média e desvio padrão por antena × subportadora, para amplitude
+e fase sanitizada (1.368 atributos).
+
+```
+.venv/Scripts/python.exe scripts/treinar_baseline.py --protocolo s2 --modelo rf
+.venv/Scripts/python.exe scripts/treinar_baseline.py --protocolo s1 --modelo svm --seed 1
+```
+
+| Opção | O que faz |
+|---|---|
+| `--protocolo` | `s2` (padrão) — cross-subject oficial: S05, S10, …, S40 só no teste. `s1` — 10 sequências de cada ação sorteadas para o teste |
+| `--modelo` | `rf` (padrão) ou `svm` |
+| `--acoes` | `p3` (padrão, as 27), `p1` (diárias) ou `p2` (reabilitação) |
+| `--janela` / `--passo` | Quadros por janela (padrão 30) e passo (padrão = janela, sem sobreposição) |
+| `--seed` | Semente do sorteio do S1, do modelo e do bootstrap (registrada no JSON) |
+| `--refazer` | Reconstrói o cache do CSI |
+
+- **Sem vazamento:** a divisão é sempre por **sequência** (sujeito, ação) — nunca
+  por quadro ou janela, que poria quadros vizinhos de 100 ms dos dois lados.
+- **Duas visões:** acurácia **por janela** e **por sequência** (média das
+  probabilidades das janelas da sequência, 9 no padrão), com **IC 95% por bootstrap de sequências** e a
+  linha do acaso (1/27 ≈ 3,7%).
+- **Cache:** na primeira execução, amplitude e fase sanitizada das 1.080 sequências
+  vão para `artifacts/cache/` (~9 GB em disco, lido por memmap — nunca carregado
+  inteiro na RAM). As execuções seguintes o reaproveitam.
+- **Saídas:** com `<sufixo>` = `<protocolo>_<modelo>[_<acoes>]_j<janela>_p<passo>_seed<seed>`
+  (`_<acoes>` só fora do P3), métricas em `artifacts/resultados/baseline_<sufixo>.json`
+  (não versionado) e as matrizes de confusão normalizadas em
+  `artifacts/figuras/confusao_<sufixo>.png` (por janela) e
+  `artifacts/figuras/confusao_<sufixo>_seq.png` (por sequência).
+
 ## 💾 Dataset — MM-Fi
 
 [MM-Fi](https://github.com/ybhbingo/MMFi_dataset) — 1.080 sequências de 297 quadros
@@ -134,11 +168,16 @@ AICT-I-WiPose/
 ├── artifacts/figuras/           Figuras geradas (versionadas)
 ├── docs/                        Análises e documentação
 ├── scripts/
-│   └── inspecionar_mmfi.py      Inspeção de amostra do MM-Fi
+│   ├── inspecionar_mmfi.py      Inspeção de amostra do MM-Fi
+│   └── treinar_baseline.py      Baseline de classificação das ações (Tarefa c)
 ├── src/
 │   ├── mmfi.py                  Carregamento do MM-Fi
+│   ├── protocolos.py            Splits S1/S2 por sequência, sem vazamento
+│   ├── cache_csi.py             Cache em disco do CSI (memmap)
+│   ├── atributos.py             Janelas de quadros e atributos estatísticos
+│   ├── avaliacao.py             Acurácia, IC bootstrap e matriz de confusão
 │   └── visualizacao_mmfi.py     Gráficos de CSI e esqueleto 3D
-├── tests/test_mmfi.py           Testes (pulam se o dataset não estiver presente)
+├── tests/                       Testes (os que precisam do dataset pulam sem ele)
 ├── tema.pdf                     Proposta da disciplina
 └── requirements.txt
 ```
