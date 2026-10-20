@@ -28,13 +28,16 @@ _bmad-output/
 CLAUDE.md
 AGENTS.md
 .bmad-cache/
+.agent/
 
-# Saidas de execucao. As FIGURAS sao versionadas (entram no relatorio);
-# cache, checkpoints e features derivadas, nao.
+# Saidas de execucao. As FIGURAS e METRICAS sao versionadas (entram no relatorio);
+# cache, checkpoints e features derivadas pesadas, nao.
 artifacts/*
 !artifacts/figuras/
 artifacts/figuras/*
 !artifacts/figuras/*.png
+!artifacts/*.json
+artifacts/.mplcache/
 
 # Dataset MM-Fi — cada integrante baixa a propria copia. Nem o original nem a
 # versao leve gerada por scripts/empacotar_mmfi.py entram no repositorio.
