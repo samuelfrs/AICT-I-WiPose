@@ -517,3 +517,51 @@ def sanitizar_fase(fase: np.ndarray, por_metade: bool = True) -> np.ndarray:
                 coeficientes = np.polyfit(k, traco, 1)
                 saneada[antena, inicio:fim, t] = traco - np.polyval(coeficientes, k)
     return saneada.astype(np.float32)
+
+
+def sanitizar_fase_lote(fase: np.ndarray, por_metade: bool = True) -> np.ndarray:
+    """Versão vetorizada de :func:`sanitizar_fase` para ``(..., 3, 114, 10)``.
+
+    Mesmo algoritmo — ``unwrap`` ao longo das subportadoras e subtração de uma
+    reta de mínimos quadrados por bloco de 20 MHz —, mas sem laço em Python. O
+    laço de :func:`sanitizar_fase` custa 60 ajustes por quadro (3 antenas ×
+    2 blocos × 10 amostras); nos 320 mil
+    quadros do dataset isso inviabiliza o cache.
+
+    A reta sai da forma fechada dos mínimos quadrados, aplicada de uma vez a
+    todos os traços do bloco (``k = 0..n-1``)::
+
+        b = Σ(k - k̄)(y - ȳ) / Σ(k - k̄)²     a = ȳ - b·k̄
+
+    Aceita qualquer número de eixos à esquerda, ex.: ``(297, 3, 114, 10)`` para
+    uma sequência inteira. O eixo das subportadoras é sempre o penúltimo.
+    """
+    if fase.ndim < 3:
+        raise ValueError(f"Esperado tensor (..., antenas, subportadoras, tempo), "
+                         f"obtido ndim={fase.ndim}.")
+
+    n_subportadoras = fase.shape[-2]
+    if por_metade and n_subportadoras == N_SUBPORTADORAS:
+        blocos = [(0, FRONTEIRA_20MHZ), (FRONTEIRA_20MHZ, n_subportadoras)]
+    else:
+        if por_metade:
+            warnings.warn(
+                f"por_metade=True ignorado: esperava {N_SUBPORTADORAS} "
+                f"subportadoras, recebeu {n_subportadoras}. Ajustando uma reta só.",
+                stacklevel=2,
+            )
+        blocos = [(0, n_subportadoras)]
+
+    fase = np.asarray(fase, dtype=np.float64)
+    saneada = np.empty_like(fase)
+    for inicio, fim in blocos:
+        # Unwrap dentro do bloco, como em sanitizar_fase: a fronteira é real.
+        traco = np.unwrap(fase[..., inicio:fim, :], axis=-2)
+        k = np.arange(fim - inicio, dtype=np.float64)
+        k_centrado = (k - k.mean())[:, None]          # (n, 1): broadcast no tempo
+        media_y = traco.mean(axis=-2, keepdims=True)
+        inclinacao = ((k_centrado * (traco - media_y)).sum(axis=-2, keepdims=True)
+                      / (k_centrado ** 2).sum())
+        intercepto = media_y - inclinacao * k.mean()
+        saneada[..., inicio:fim, :] = traco - (intercepto + inclinacao * k[:, None])
+    return saneada.astype(np.float32)

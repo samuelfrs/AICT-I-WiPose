@@ -30,13 +30,16 @@ AGENTS.md
 .bmad-cache/
 .agent/
 
-# Saidas de execucao. As FIGURAS e METRICAS sao versionadas (entram no relatorio);
-# cache, checkpoints e features derivadas pesadas, nao.
+# Saidas de execucao. As FIGURAS e as METRICAS (JSON leves) sao versionadas
+# (entram no relatorio); cache, checkpoints e features derivadas pesadas, nao.
 artifacts/*
 !artifacts/figuras/
 artifacts/figuras/*
 !artifacts/figuras/*.png
 !artifacts/*.json
+!artifacts/resultados/
+artifacts/resultados/*
+!artifacts/resultados/*.json
 artifacts/.mplcache/
 
 # Dataset MM-Fi — cada integrante baixa a propria copia. Nem o original nem a

@@ -20,27 +20,37 @@ Processar sinais de rádio (CSI de WiFi a 5 GHz no padrão IEEE 802.11n) e infer
 |---|---|---|---|
 | **a** | Revisão bibliográfica — Wi-Pose (atividades predefinidas) × Winect (free-form) | ✅ Concluída | [`docs/analise-mmfi.md`](docs/analise-mmfi.md) e [`docs/guia-do-projeto.md`](docs/guia-do-projeto.md) |
 | **b** | Manipulação das estruturas de dados — carregar o CSI e plotar gráficos | ✅ Concluída | [`src/mmfi.py`](src/mmfi.py), [`scripts/inspecionar_mmfi.py`](scripts/inspecionar_mmfi.py) e versão leve em `dataset/MMFi_leve` |
-| **c** | Classificação de movimentos — modelo de ML/DL para discriminar as ações | ✅ Concluída | Rede neural multi-head em [`src/rede_neural.py`](src/rede_neural.py) e [`scripts/treinar_rede.py`](scripts/treinar_rede.py) |
+| **c** | Classificação de movimentos — modelos de ML e Deep Learning | ✅ Concluída | Baseline RF/SVM ([`scripts/treinar_baseline.py`](scripts/treinar_baseline.py)) e Rede Neural Multi-Head ([`src/rede_neural.py`](src/rede_neural.py), [`scripts/treinar_rede.py`](scripts/treinar_rede.py)) |
 | **d** | Pré-processamento e calibração — filtragem espacial/temporal e offsets de fase | ✅ Concluída | Sanitização de fase por regressão linear em [`src/mmfi.py`](src/mmfi.py) e normalização min-max |
-| **e** | Análise crítica — matrizes de confusão e impacto de subportadoras ruidosas | ✅ Concluída | Experimento de ablação espectral OFDM e matriz de confusão em [`artifacts/figuras/`](artifacts/figuras/) |
+| **e** | Análise crítica — matrizes de confusão e impacto de subportadoras ruidosas | ✅ Concluída | Matrizes de confusão e experimento de ablação espectral OFDM em [`artifacts/figuras/`](artifacts/figuras/) |
 
 ---
 
-## 🧠 Rede Neural Multi-Head & Resultados Experimentais (Tarefas c e e)
+## 🔬 Modelagem Preditiva: Do Baseline Clássico à Rede Neural Multi-Head
 
-Para atender simultaneamente ao requisito de classificação com matriz de confusão (Tarefas c e e) e à reconstrução espacial contínua (Rota B), desenvolvemos a arquitetura convolucional multi-tarefa **`CSISpatialSpectralTemporalNet`** em [`src/rede_neural.py`](src/rede_neural.py):
+O projeto implementou duas abordagens complementares de aprendizado de máquina para resolver a Tarefa (c):
 
-* **Entrada:** Tensor CSI tridimensional de dimensões `(Batch, C=3, 114 subportadoras, 10 amostras temporais)`.
-* **Backbone Convolucional Residual:** Três blocos convolucionais com *Batch Normalization*, compressão progressiva no domínio espectral ($114 \rightarrow 57 \rightarrow 28 \rightarrow 14$) e temporal ($10 \rightarrow 5$), gerando um vetor latente de 256 características via *Adaptive Average Pooling 2D*.
-* **Cabeça 1 (Classificação — Tarefas c e e):** Mapeia o vetor latente para as 27 classes de ação física via *Cross-Entropy Loss*.
-* **Cabeça 2 (Pose 3D — Rota B):** Regride as coordenadas contínuas $(x, y, z)$ das 17 articulações corporais em metros via *MSE Loss*, com prior anatômico inicializado no centro da cena ($Z \approx 3{,}0\text{ m}$).
-* **Função de Perda Conjunta:** $\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls}} + 10{,}0 \cdot \mathcal{L}_{\text{pose}}$.
+### 1. Baselines Clássicos de Machine Learning (RF e SVM)
+* **Arquivos:** [`scripts/treinar_baseline.py`](scripts/treinar_baseline.py), [`src/atributos.py`](src/atributos.py), [`src/avaliacao.py`](src/avaliacao.py).
+* **Método:** Extrai atributos estatísticos de amplitude por subportadora (média, desvio padrão, percentis, energia espectral) sobre janelas temporais e treina classificadores **Random Forest** e **SVM**.
+* **Resultados e Métricas:** Salvos em `artifacts/resultados/baseline_*.json` com intervalos de confiança por bootstrap e matrizes de confusão em `artifacts/figuras/confusao_*.png`.
 
-### 📊 Desempenho no Protocolo Oficial Cross-Subject (Split S2 / Protocolo P3)
+### 2. Rede Neural Convolucional Multi-Head (Deep Learning)
+* **Arquivos:** [`src/rede_neural.py`](src/rede_neural.py), [`src/dataset_rede.py`](src/dataset_rede.py), [`scripts/treinar_rede.py`](scripts/treinar_rede.py).
+* **Arquitetura `CSISpatialSpectralTemporalNet`:**
+  * **Entrada:** Tensor CSI tridimensional `(Batch, C=3, 114 subportadoras, 10 amostras temporais)`.
+  * **Backbone Convolucional Residual:** Três blocos com *Batch Normalization*, compressão no domínio espectral ($114 \rightarrow 57 \rightarrow 28 \rightarrow 14$) e temporal ($10 \rightarrow 5$), gerando um vetor latente de 256 características via *Adaptive Average Pooling 2D*.
+  * **Cabeça 1 (Classificação — Tarefas c e e):** 27 ações corporais via *Cross-Entropy Loss*.
+  * **Cabeça 2 (Pose 3D — Rota B):** Regride coordenadas métricas $(x, y, z)$ das 17 articulações em metros via *MSE Loss*, com prior anatômico inicializado no centro da cena ($Z \approx 3{,}0\text{ m}$).
+  * **Função de Perda Conjunta:** $\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls}} + 10{,}0 \cdot \mathcal{L}_{\text{pose}}$.
 
-O modelo foi avaliado no protocolo mais exigente da literatura (**Split S2**), treinando em 32 voluntários (12.960 amostras) e testando exclusivamente em 8 voluntários nunca vistos pelo modelo (`S05, S10, S15, S20, S25, S30, S35, S40`, totalizando 3.240 amostras) sobre todas as 27 ações corporais:
+---
 
-| Métrica Avaliada | Nosso Modelo (Multi-Head) | Baseline Publicado no MM-Fi (NeurIPS 2023) | Observação Técnica |
+## 📊 Desempenho no Protocolo Oficial Cross-Subject (Split S2 / Protocolo P3)
+
+Avaliação sob o protocolo **Cross-Subject (Split S2)**, treinando em 32 voluntários (12.960 amostras) e testando exclusivamente em 8 voluntários nunca vistos pelo modelo (`S05, S10, S15, S20, S25, S30, S35, S40`, totalizando 3.240 amostras) sobre todas as 27 ações corporais:
+
+| Métrica Avaliada | Nossa Rede Neural (Multi-Head) | Baseline Publicado no MM-Fi (NeurIPS 2023) | Observação Técnica |
 |---|---|---|---|
 | **Acurácia Top-1 (27 Ações)** | **5,74%** (Pico de **6,11%**) | 5,45% (AGCN) / 5,12% (CTRGCN) | **Superou o baseline oficial de WiFi do dataset** (Acaso = 3,70%) |
 | **MPJPE de Pose 3D (mm)** | **243,42 mm** (Melhor: **241,93 mm**) | 231,10 mm (MetaFi++) | Ficou a apenas ~10 mm do modelo de ponta treinado em 4x RTX 3090 |
@@ -49,9 +59,9 @@ O modelo foi avaliado no protocolo mais exigente da literatura (**Split S2**), t
 
 ---
 
-### 🔬 Análise Crítica: Impacto de Subportadoras OFDM (Tarefa e)
+## 🔬 Análise Crítica: Impacto de Subportadoras OFDM (Tarefa e)
 
-Executamos o experimento sistemático de ablação de subportadoras OFDM no padrão IEEE 802.11n (40 MHz) para avaliar o efeito do ruído e da densidade espectral:
+Experimento de ablação controlada do espectro OFDM no padrão IEEE 802.11n (40 MHz) para avaliar o efeito do ruído e da largura de banda:
 
 | Cenário Espectral | Subportadoras Ativas | Acurácia Top-1 | MPJPE de Pose 3D (mm) | Conclusão Física de RF |
 |---|---|---|---|---|
@@ -62,9 +72,9 @@ Executamos o experimento sistemático de ablação de subportadoras OFDM no padr
 
 ---
 
-### 🖼️ Galeria de Resultados Científicos
+## 🖼️ Galeria de Resultados Científicos
 
-As figuras geradas em alta resolução encontram-se salvas e versionadas em [`artifacts/figuras/`](artifacts/figuras/):
+As figuras em alta resolução encontram-se salvas e versionadas em [`artifacts/figuras/`](artifacts/figuras/):
 
 | Matriz de Confusão (Tarefa e) | Ablação de Subportadoras OFDM (Tarefa e) | Reconstrução de Pose 3D (Rota B) |
 |:---:|:---:|:---:|
@@ -83,26 +93,25 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 2. Executar os Testes Automatizados (35 Testes)
+### 2. Executar a Suíte de Testes Automatizados
 
 ```powershell
 python -m pytest tests/ -v
 ```
 
-### 3. Executar o Treinamento e Avaliação da Rede Neural
-
-Para reproduzir o treinamento completo das 15 épocas, gerar as figuras e o JSON de métricas:
+### 3. Executar o Treinamento da Rede Neural Multi-Head
 
 ```powershell
 python scripts/treinar_rede.py --split S2 --protocolo P3 --epocas 15 --batch-size 32 --stride 20
 ```
 
-*Para um teste rápido de fumaça (2 épocas):*
+### 4. Executar os Baselines Clássicos (Random Forest e SVM)
+
 ```powershell
-python scripts/treinar_rede.py --epocas 2 --stride 30 --max-seq-treino 10 --max-seq-teste 5
+python scripts/treinar_baseline.py
 ```
 
-### 4. Inspecionar Amostras Individuais do MM-Fi (Tarefa b)
+### 5. Inspecionar Amostras Individuais do MM-Fi (Tarefa b)
 
 ```powershell
 python scripts/inspecionar_mmfi.py --sujeito S18 --acao A22 --quadro 120
@@ -111,12 +120,15 @@ python scripts/inspecionar_mmfi.py --acao A12 --movimento
 
 ---
 
-## 📖 Documentação Acadêmica Entregue
+## 📖 Documentação Acadêmica Disponível
 
 | Documento | Descrição |
 |---|---|
+| [`docs/guia_apresentacao_professor.md`](docs/guia_apresentacao_professor.md) | **Roteiro completo de apresentação para o professor**, com pitch cronometrado (5-8 min), explicação de cada figura e guia de defesa contra perguntas difíceis (Q&A). |
+| [`docs/contexto_antigravity.md`](docs/contexto_antigravity.md) | **Documento de passagem de bastão (Handover)** para instâncias do Antigravity ou novos pesquisadores continuarem o trabalho em outra máquina. |
 | [`docs/relatorio_rede_neural.md`](docs/relatorio_rede_neural.md) | **Relatório técnico completo em Markdown**, detalhando formulação de RF, equações de canal, arquitetura e análise das matrizes de confusão. |
 | [`docs/relatorio_rede_neural.tex`](docs/relatorio_rede_neural.tex) | **Artigo científico formal em LaTeX** formatado em duas colunas (padrão IEEE / SBrT), com equações, tabelas e citações, pronto para compilação em PDF. |
+| [`docs/resumo-do-projeto.md`](docs/resumo-do-projeto.md) | Visão geral rápida dos requisitos da disciplina e histórico do projeto. |
 | [`docs/analise-mmfi.md`](docs/analise-mmfi.md) | Análise aprofundada do dataset MM-Fi e justificativa metodológica da migração. |
 | [`docs/replicar-mmfi.md`](docs/replicar-mmfi.md) | Estudo comparativo contra os baselines oficiais publicados. |
 
@@ -128,26 +140,35 @@ python scripts/inspecionar_mmfi.py --acao A12 --movimento
 AICT-I-WiPose/
 ├── artifacts/
 │   ├── figuras/                     Figuras científicas versionadas (PNG)
-│   │   ├── matriz_confusao.png      Matriz de confusão normalizada (27 ações)
+│   │   ├── matriz_confusao.png      Matriz de confusão da Rede Neural (27 ações)
 │   │   ├── ablacao_subportadoras.png Gráfico de impacto espectral OFDM
-│   │   └── pose3d_predicao.png      Esqueleto 3D real vs estimado
-│   └── resultados_rede_neural.json  Métricas e histórico numérico de treinamento
+│   │   ├── pose3d_predicao.png      Esqueleto 3D real vs estimado
+│   │   └── confusao_s*.png          Matrizes de confusão dos baselines RF/SVM
+│   ├── resultados/                  Métricas em JSON dos baselines RF e SVM
+│   └── resultados_rede_neural.json  Métricas e histórico numérico da Rede Neural
 ├── docs/
 │   ├── guia_apresentacao_professor.md Roteiro falado e guia de defesa para o professor
-│   ├── contexto_antigravity.md      Handover tecnico para nova maquina / Antigravity
+│   ├── contexto_antigravity.md      Handover técnico para nova máquina / Antigravity
 │   ├── relatorio_rede_neural.md     Relatório técnico da rede neural
-│   └── relatorio_rede_neural.tex    Artigo formal em LaTeX
+│   ├── relatorio_rede_neural.tex    Artigo formal em LaTeX
+│   └── resumo-do-projeto.md         Resumo executivo do projeto
 ├── scripts/
-│   ├── treinar_rede.py              Pipeline de treino, métricas e ablação
+│   ├── treinar_rede.py              Pipeline de treino e ablação da Rede Neural
+│   ├── treinar_baseline.py          Treino dos baselines clássicos (RF e SVM)
 │   ├── inspecionar_mmfi.py          Inspeção e plot de amostras CSI/3D
 │   └── empacotar_mmfi.py            Conversor de dados para versão leve (.npz)
 ├── src/
 │   ├── rede_neural.py               Arquitetura CSISpatialSpectralTemporalNet
 │   ├── dataset_rede.py              Dataloader PyTorch vetorizado em RAM
+│   ├── atributos.py                 Extração de atributos estatísticos (ML clássico)
+│   ├── avaliacao.py                 Acurácia e IC bootstrap (ML clássico)
+│   ├── cache_csi.py                 Cache em disco de tensores CSI
+│   ├── protocolos.py                Splits oficiais S1 e S2
 │   ├── mmfi.py                      Carregamento do MM-Fi e sanitização de fase
 │   └── visualizacao_mmfi.py         Visualização 3D de poses e CSI
 ├── tests/
 │   ├── test_rede_neural.py          Testes da rede neural e métricas
+│   ├── test_ml01.py                 Testes dos baselines clássicos
 │   └── test_mmfi.py                 Testes do dataset e sanitização
 ├── tema.pdf                         Enunciado oficial da disciplina
 └── requirements.txt                 Dependências do projeto
