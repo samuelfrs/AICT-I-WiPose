@@ -1,13 +1,15 @@
-"""Dataset PyTorch de Alta Performance para a Rede Neural Multi-Head no MM-Fi.
+"""Dataset PyTorch para Classificação de Ações em Janelas Temporais de CSI (MM-Fi).
 
-Implementação pré-carregada e vetorizada em memória (RAM):
-- Carrega apenas os quadros subamostrados ([::stride_quadros]) direto do disco para Tensores Contíguos.
-- Ocupação de RAM extremamente baixa: ~180 MB para o dataset de treino inteiro.
-- Elimina 100% da latência de descompressão/disco durante as épocas de treino.
-- Suporta splits S1 (intra-sujeito) e S2 (Cross-Subject oficial) e protocolos P1, P2 e P3.
+Implementação vetorizada com cache leve de 50 MB:
+- Extrai características espectro-temporais (média e desvio padrão temporal de amplitude e fase sanitizada)
+  em janelas deslizantes de 30 quadros (3 segundos = 300 pacotes OFDM).
+- Suporta splits S1 (intra-sujeito agrupado por sequência) e S2 (Cross-Subject oficial).
+- Suporta protocolos P1 (14 ações cotidianas), P2 (13 exercícios) e P3 (27 ações completas).
+- Evita vazamento de dados: o scaler é ajustado apenas no conjunto de treino.
 """
 
 from pathlib import Path
+import time
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 
@@ -24,139 +26,189 @@ from src.mmfi import (
     PROTOCOLO_1,
     PROTOCOLO_2,
     PROTOCOLO_3,
-    SUJEITOS_TESTE_S2,
     caminho_dataset,
     caminho_pacote,
-    sanitizar_fase,
+    sanitizar_fase_lote,
 )
+from src.protocolos import dividir_s1_agrupado, dividir_s2
+
+CACHE_PADRAO = Path(__file__).resolve().parent.parent / "artifacts" / "cache_janelas_30.npz"
 
 
-class MMFiMultiTaskDataset(Dataset if torch else object):
-    """Dataset PyTorch com tensores contíguos em memória para treinamento rápido."""
+def construir_cache_janelas(
+    caminho_cache: Path = CACHE_PADRAO,
+    raiz: Optional[Union[str, Path]] = None,
+    janela: int = 30,
+    passo: int = 30,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Extrai características das janelas de todas as 1.080 sequências e salva em cache."""
+    caminho_cache = Path(caminho_cache)
+    caminho_cache.parent.mkdir(parents=True, exist_ok=True)
+
+    acoes_ordenadas = sorted(list(ACOES.keys()))
+    acao_to_idx = {a: i for i, a in enumerate(acoes_ordenadas)}
+    todos_sujeitos = [f"S{i:02d}" for i in range(1, 41)]
+
+    intervalos = [(i, i + janela) for i in range(0, N_QUADROS - janela + 1, passo)]
+
+    todas_janelas_X = []
+    todos_y = []
+    todos_seq_indices = []
+    seq_info = []
+
+    seq_count = 0
+    t0 = time.time()
+    print(f"[CACHE] Construindo cache de janelas temporais em {caminho_cache}...")
+
+    for s in todos_sujeitos:
+        for a in acoes_ordenadas:
+            pkg_path = caminho_pacote(s, a, raiz=raiz)
+            if not pkg_path.is_file():
+                continue
+
+            with np.load(pkg_path) as pkg:
+                amp = pkg["csi_amp"]   # (297, 3, 114, 10)
+                fase = pkg["csi_fase"] # (297, 3, 114, 10)
+
+                ruins = ~np.isfinite(amp)
+                if ruins.any():
+                    amp[ruins] = 0.0
+
+                fase_san = sanitizar_fase_lote(fase)
+                y_val = acao_to_idx[a]
+
+                for ini, fim in intervalos:
+                    sub_a = amp[ini:fim]
+                    sub_f = fase_san[ini:fim]
+
+                    m_a = sub_a.mean(axis=(0, 3)).reshape(-1)
+                    s_a = sub_a.std(axis=(0, 3)).reshape(-1)
+                    m_f = sub_f.mean(axis=(0, 3)).reshape(-1)
+                    s_f = sub_f.std(axis=(0, 3)).reshape(-1)
+
+                    feat = np.concatenate([m_a, s_a, m_f, s_f]).astype(np.float32)
+                    todas_janelas_X.append(feat)
+                    todos_y.append(y_val)
+                    todos_seq_indices.append(seq_count)
+
+                seq_info.append(f"{s}_{a}")
+                seq_count += 1
+
+    X = np.stack(todas_janelas_X)
+    y = np.array(todos_y, dtype=np.int64)
+    seq_indices = np.array(todos_seq_indices, dtype=np.int64)
+    seq_info = np.array(seq_info)
+
+    np.savez_compressed(
+        caminho_cache,
+        X=X,
+        y=y,
+        seq_indices=seq_indices,
+        seq_info=seq_info,
+    )
+    print(f"[CACHE] Cache concluído em {time.time() - t0:.1f}s. Amostras: {len(X)}")
+    return X, y, seq_indices, seq_info
+
+
+class MMFiTemporalDataset(Dataset if torch else object):
+    """Dataset PyTorch com características temporais de CSI para treino/teste."""
 
     def __init__(
         self,
-        raiz: Optional[Union[str, Path]] = None,
         split: str = "S2",
         fase: str = "treino",  # "treino" ou "teste"
         protocolo: str = "P3",  # "P1", "P2" ou "P3"
-        usar_fase: bool = False,
-        stride_quadros: int = 15,
-        sujeitos: Optional[List[str]] = None,
-        max_sequencias: Optional[int] = None,
+        caminho_cache: Optional[Union[str, Path]] = None,
+        refazer_cache: bool = False,
+        seed: int = 0,
+        media_scaler: Optional[np.ndarray] = None,
+        desvio_scaler: Optional[np.ndarray] = None,
     ):
         if torch is None:
             raise RuntimeError("PyTorch não está instalado no ambiente.")
         super().__init__()
-        self.raiz = caminho_dataset(raiz)
         self.split = split
         self.fase = fase
         self.protocolo = protocolo
-        self.usar_fase = usar_fase
-        self.stride_quadros = max(1, stride_quadros)
+        self.caminho_cache = Path(caminho_cache) if caminho_cache else CACHE_PADRAO
 
-        # Mapeamento de ações
-        self.acoes_lista = sorted(list(ACOES.keys()))
+        if not self.caminho_cache.is_file() or refazer_cache:
+            X_all, y_all, seq_indices_all, seq_info_all = construir_cache_janelas(
+                caminho_cache=self.caminho_cache
+            )
+        else:
+            dados = np.load(self.caminho_cache)
+            X_all = dados["X"]
+            y_all = dados["y"]
+            seq_indices_all = dados["seq_indices"]
+            seq_info_all = dados["seq_info"]
+
+        # Mapeamento e filtragem de ações
+        todas_acoes = sorted(list(ACOES.keys()))
         if protocolo == "P1":
-            self.acoes_ativas = set(PROTOCOLO_1)
+            acoes_ativas = set(PROTOCOLO_1)
         elif protocolo == "P2":
-            self.acoes_ativas = set(PROTOCOLO_2)
+            acoes_ativas = set(PROTOCOLO_2)
         else:
-            self.acoes_ativas = set(PROTOCOLO_3)
+            acoes_ativas = set(PROTOCOLO_3)
 
-        self.acao_para_idx = {acao: i for i, acao in enumerate(self.acoes_lista)}
+        self.acoes_lista = sorted(list(acoes_ativas))
+        self.num_classes = len(self.acoes_lista)
+        acao_para_novo_idx = {a: i for i, a in enumerate(self.acoes_lista)}
 
-        # Sujeitos conforme split
-        todos_sujeitos = [f"S{i:02d}" for i in range(1, 41)]
-        if sujeitos is not None:
-            self.sujeitos = sujeitos
-        elif split == "S2":
-            if fase == "teste":
-                self.sujeitos = list(SUJEITOS_TESTE_S2)
-            else:
-                self.sujeitos = [s for s in todos_sujeitos if s not in SUJEITOS_TESTE_S2]
+        # Filtra sequências das ações do protocolo
+        mask_proto = np.array(
+            [seq_info_all[sid].split("_")[1] in acoes_ativas for sid in seq_indices_all]
+        )
+        X_proto = X_all[mask_proto]
+        y_proto_raw = y_all[mask_proto]
+        seq_idx_proto = seq_indices_all[mask_proto]
+
+        y_proto = np.array([acao_para_novo_idx[todas_acoes[yi]] for yi in y_proto_raw])
+
+        # Divisão Disjunta por Sequência conforme Protocolo
+        if split == "S1":
+            treino_seqs, teste_seqs = dividir_s1_agrupado(
+                acoes=self.acoes_lista, seed=seed, proporcao_teste=0.25
+            )
         else:
-            self.sujeitos = todos_sujeitos
+            treino_seqs, teste_seqs = dividir_s2(acoes=self.acoes_lista)
 
-        # Pré-carregamento vetorizado em Tensores
-        self._carregar_dados_vetorizados(max_sequencias)
+        seqs_alvo = set(f"{s}_{a}" for s, a in (treino_seqs if fase == "treino" else teste_seqs))
+        mask_split = np.array([seq_info_all[sid] in seqs_alvo for sid in seq_idx_proto])
 
-    def _carregar_dados_vetorizados(self, max_sequencias: Optional[int] = None) -> None:
-        """Carrega e vetoriza as fatias [::stride] diretamente para arrays em memória."""
-        lista_csi = []
-        lista_rotulos = []
-        lista_poses = []
+        X_sel = X_proto[mask_split]
+        y_sel = y_proto[mask_split]
+        seq_idx_sel = seq_idx_proto[mask_split]
 
-        count_seq = 0
-        for sujeito in self.sujeitos:
-            for acao in sorted(list(self.acoes_ativas)):
-                if self.split == "S1":
-                    eh_teste = (hash(f"{sujeito}_{acao}") % 5) == 0
-                    if (self.fase == "teste" and not eh_teste) or (self.fase == "treino" and eh_teste):
-                        continue
-
-                arquivo_pacote = caminho_pacote(sujeito, acao, self.raiz)
-                if not arquivo_pacote.is_file():
-                    continue
-
-                try:
-                    with np.load(arquivo_pacote) as pkg:
-                        # Extrai apenas as fatias necessárias (redução imediata de 95% do volume)
-                        amp = pkg["csi_amp"][::self.stride_quadros].astype(np.float32)  # (N, 3, 114, 10)
-                        pose = pkg["pose"][::self.stride_quadros].astype(np.float32)    # (N, 17, 3)
-
-                        # Tratamento vetorizado dos -inf
-                        ruins = ~np.isfinite(amp)
-                        if ruins.any():
-                            amp[ruins] = 0.0
-
-                        # Normalização Min-Max por quadro vetorizada
-                        mins = amp.min(axis=(1, 2, 3), keepdims=True)
-                        maxs = amp.max(axis=(1, 2, 3), keepdims=True)
-                        delta = maxs - mins
-                        delta[delta == 0] = 1.0
-                        amp_norm = (amp - mins) / delta
-
-                        if self.usar_fase:
-                            fase = pkg["csi_fase"][::self.stride_quadros].astype(np.float32)
-                            fase_sanitizada = np.empty_like(fase)
-                            for idx in range(len(fase)):
-                                fase_sanitizada[idx] = sanitizar_fase(fase[idx])
-                            fase_norm = np.clip(fase_sanitizada / np.pi, -1.0, 1.0)
-                            csi_completo = np.concatenate([amp_norm, fase_norm], axis=1)  # (N, 6, 114, 10)
-                        else:
-                            csi_completo = amp_norm  # (N, 3, 114, 10)
-
-                        rotulo = self.acao_para_idx[acao]
-                        n_amostras = len(amp_norm)
-
-                        lista_csi.append(csi_completo)
-                        lista_rotulos.append(np.full((n_amostras,), rotulo, dtype=np.int64))
-                        lista_poses.append(pose)
-
-                        count_seq += 1
-                        if max_sequencias and count_seq >= max_sequencias:
-                            break
-                except Exception:
-                    continue
-            if max_sequencias and count_seq >= max_sequencias:
-                break
-
-        if lista_csi:
-            self.csi = torch.from_numpy(np.concatenate(lista_csi, axis=0)).float()
-            self.rotulos = torch.from_numpy(np.concatenate(lista_rotulos, axis=0)).long()
-            self.poses = torch.from_numpy(np.concatenate(lista_poses, axis=0)).float()
+        # Normalização com parâmetros do treino
+        if fase == "treino":
+            self.media = X_sel.mean(axis=0, keepdims=True)
+            self.desvio = X_sel.std(axis=0, keepdims=True)
+            self.desvio[self.desvio < 1e-6] = 1.0
         else:
-            self.csi = torch.empty(0, 3, 114, 10)
-            self.rotulos = torch.empty(0, dtype=torch.long)
-            self.poses = torch.empty(0, 17, 3)
+            if media_scaler is None or desvio_scaler is None:
+                raise ValueError("Para a fase de teste, forneça media_scaler e desvio_scaler do treino.")
+            self.media = media_scaler
+            self.desvio = desvio_scaler
+
+        X_norm = (X_sel - self.media) / self.desvio
+
+        self.X = torch.from_numpy(X_norm).float()
+        self.y = torch.from_numpy(y_sel).long()
+        self.seq_indices = seq_idx_sel
+        self.seq_info = [seq_info_all[sid] for sid in seq_idx_sel]
 
     def __len__(self) -> int:
-        return len(self.rotulos)
+        return len(self.y)
 
     def __getitem__(self, idx: int) -> Dict[str, "torch.Tensor"]:
         return {
-            "csi": self.csi[idx],
-            "rotulo_acao": self.rotulos[idx],
-            "pose_3d": self.poses[idx],
+            "csi": self.X[idx],
+            "rotulo_acao": self.y[idx],
+            "seq_idx": self.seq_indices[idx],
         }
+
+
+# Alias para compatibilidade com código legado
+MMFiMultiTaskDataset = MMFiTemporalDataset

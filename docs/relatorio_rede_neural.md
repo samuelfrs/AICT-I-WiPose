@@ -1,168 +1,160 @@
-# Relatório Técnico: Rede Neural Multi-Head para Sensoriamento de Poses e Classificação de Ações via WiFi CSI
+# Relatório Técnico: Rede Neural Residual Espectro-Temporal para Classificação de Ações via WiFi CSI
 
 **Projeto:** Sensoriamento de Poses Humanas Usando Sinais WiFi  
 **Disciplina:** Ações Integradas em Ciência e Tecnologia I (AICT I)  
 **Instituição:** Universidade Federal do Ceará (UFC) — Departamento de Engenharia de Teleinformática (DETI)  
 **Código das Tarefas Atendidas:** Tarefa (c) — *Classificação de Movimentos* e Tarefa (e) — *Análise Crítica & Matrizes de Confusão*  
-**Branch de Desenvolvimento:** `feature/classificacao-csi-rede-neural`  
+**Branch de Desenvolvimento:** `feature/refatoracao-rede-neural-csi`  
 
 ---
 
-## 1. Introdução e Formulação do Problema
+## 1. Introdução e Formulação Física do Problema
 
-O sensoriamento passivo de atividades e posturas humanas por radiofrequência (RF) fundamenta-se no princípio de que a propagação de ondas eletromagnéticas em ambientes internos (*indoor*) é perturbada pela movimentação cinemática do corpo. Em sistemas comerciais compatíveis com o padrão IEEE 802.11n, a camada física opera com modulação por divisão de frequências ortogonais (**OFDM**).
+O sensoriamento passivo de atividades humanas por radiofrequência (RF) fundamenta-se no princípio de que a propagação de ondas eletromagnéticas em ambientes internos (*indoor*) é modulada pela movimentação cinemática do corpo. Em sistemas comerciais compatíveis com o padrão IEEE 802.11n, a camada física opera com modulação por divisão de frequências ortogonais (**OFDM**).
 
-Ao contrário de métricas escalares agregadas como o RSSI (*Received Signal Strength Indicator*), que condensam toda a potência a uma média sujeita a desvanecimento destrutivo, a Informação de Estado do Canal (**CSI — Channel State Information**) amostra diretamente a **Função de Transferência do Canal (CTF)** complexa para múltiplas subportadoras ortogonais e antenas receptoras.
+Ao contrário de métricas escalares agregadas como o RSSI (*Received Signal Strength Indicator*), que condensam toda a potência a uma média escalar sujeita a desvanecimento destrutivo, a Informação de Estado do Canal (**CSI — Channel State Information**) amostra diretamente a **Função de Transferência do Canal (CTF)** complexa para múltiplas subportadoras ortogonais e antenas receptoras.
 
-No domínio do tempo, a resposta ao impulso do canal de rádio para $L$ trajetos de propagação é modelada por:
-
-$$h(\tau, t) = \sum_{l=1}^{L} a_l(t) e^{-j 2\pi f_c \tau_l(t)} \delta(\tau - \tau_l(t))$$
-
-Aplicando-se a amostragem discreta em frequência via FFT no receptor sobre as $K = 114$ subportadoras OFDM de frequência $f_k$ e antenas receptoras $m \in \{1, 2, 3\}$, o tensor de CSI recebido no instante $t$ decompõe-se em:
+No domínio do tempo e frequência, o tensor de CSI recebido no instante $t$ decompõe-se fisicamente em:
 
 $$H_m(f_k, t) = H_{m, \text{estatico}}(f_k) + \sum_{p \in \text{corpo}} a_{m, p}(t) e^{-j 2\pi f_k \tau_{m, p}(t)} + \epsilon_m(f_k, t)$$
 
 Onde:
-* $H_{m, \text{estatico}}(f_k)$ agrega as componentes estáticas do ambiente (paredes, teto e mobília).
-* $\sum_{p \in \text{corpo}} a_{m, p}(t) e^{-j 2\pi f_k \tau_{m, p}(t)}$ representa as reflexões dinâmicas induzidas pelos membros corporais em movimento, causando deslocamentos Doppler proporcionais à velocidade radial de cada articulação: $f_D(t) = -\frac{1}{\lambda} \frac{d\tau(t)}{dt}$.
-* $\epsilon_m(f_k, t)$ engloba ruído térmico aditivo (AWGN) e desvios de sincronização de hardware (*Carrier Frequency Offset* - CFO e *Packet Detection Delay* - PDD).
+* $H_{m, \text{estatico}}(f_k)$ agrega as reflexões estáticas predominantes do ambiente (paredes, teto, chão e mobília) e a fisionomia neutra estática do indivíduo.
+* $\sum_{p \in \text{corpo}} a_{m, p}(t) e^{-j 2\pi f_k \tau_{m, p}(t)}$ representa a componente dinâmica dispersiva induzida pelos membros em movimento, gerando desvios Doppler proporcionais à velocidade radial de cada articulação: $f_D(t) = -\frac{1}{\lambda} \frac{d\tau(t)}{dt}$.
+* $\epsilon_m(f_k, t)$ engloba ruído térmico aditivo e imperfeições de hardware (*Carrier Frequency Offset* - CFO e *Packet Detection Delay* - PDD).
+
+### Por que a Modelagem em Janelas Temporais é Inegociável?
+Em modelos iniciais ingênuos que tentam classificar ações a partir de um único quadro de 100 ms (10 pacotes OFDM), o componente estático $H_{\text{estatico}}$ domina quase 100% da resposta, e posturas estáticas iniciais (a pessoa aguardando o início do exercício de pé) recebem rótulos arbitrários de ações distintas. 
+
+Para capturar a real dinâmica do movimento cinemático e generalizar entre diferentes pessoas no protocolo Cross-Subject (S2), é **fundamental integrar janelas temporais de alguns segundos** (ex.: 3 segundos = 300 pacotes OFDM), calculando métricas de variabilidade dinâmica ($\sigma$) e evolução temporal que isolam as reflexões do corpo do canal estático da sala.
 
 ---
 
-## 2. Dataset MM-Fi e Estrutura dos Dados
+## 2. Dataset MM-Fi e Pré-Processamento Estruturado
 
-O projeto emprega o conjunto de referência **MM-Fi** (NeurIPS 2023), capturado com transceptores comerciais a 5 GHz operando com largura de banda de 40 MHz.
+O projeto emprega o conjunto de referência **MM-Fi** (NeurIPS 2023), capturado com transceptores comerciais a 5 GHz operando com largura de banda de 40 MHz ($K = 114$ subportadoras OFDM e $M = 3$ antenas receptoras).
 
-### 2.1 Dimensões dos Tensores
-Cada amostra de entrada é um tensor tridimensional de CSI:
-* **Antenas Receptoras ($M = 3$):** Provêm diversidade espacial e sensibilidade angular.
-* **Subportadoras OFDM ($K = 114$):** Capturam a dispersão temporal e seletividade em frequência do canal.
-* **Amostras Temporais por Quadro ($T = 10$):** Janela de 100 ms (~100 Hz de taxa de pacotes), preservando a dinâmica rápida das ações.
-
-### 2.2 Pré-Processamento e Higienização
-1. **Tratamento de Não-Finitos:** Valores `-inf` decorrentes de $\log_{10}(0)$ na amplitude em dB (~3% a 5% dos quadros) foram imputados pela média temporal correspondente, impedindo instabilidade numérica nos gradientes.
-2. **Normalização Min-Max por Quadro:**
-   $$\tilde{A}_m(f_k, t) = \frac{A_m(f_k, t) - \min(A)}{\max(A) - \min(A)}$$
-3. **Ground Truth 3D:** Esqueleto no padrão **Human3.6M** com 17 juntas em metros $(x, y, z)$ centradas no referencial da câmera óptica, com o corpo situado a uma profundidade média de $z \approx 3{,}0\text{ m}$.
+### 2.1 Janelamento Temporal e Extração de Características
+Em cada sequência de 297 quadros (aproximadamente 30 segundos de gravação a 10 Hz), aplicamos janelas deslizantes de $T = 30$ quadros (3 segundos = 300 pacotes de CSI a 100 Hz):
+* **Tratamento de Não-Finitos:** Imputação de `-inf` decorrentes de $\log_{10}(0)$ na amplitude em dB.
+* **Sanitização de Fase da Tarefa (d):** Remoção de offsets de rampa linear e desacoplamento de descontinuidades de fase entre blocos de subportadoras via regressão linear segmentada.
+* **Descritores Espectro-Temporais por Janela:** Para amplitude e fase sanitizada, calculam-se a média e o desvio padrão temporal ao longo dos 300 pacotes da janela para cada par (antena, subportadora):
+  $$X_{\text{janela}} = [\mu_{\text{amp}} (342) \mid \sigma_{\text{amp}} (342) \mid \mu_{\text{fase}} (342) \mid \sigma_{\text{fase}} (342)] \in \mathbb{R}^{1.368}$$
+  Onde $342 = 3 \text{ antenas} \times 114 \text{ subportadoras}$. O desvio padrão ($\sigma$) capta a energia Doppler do movimento humano, enquanto a média ($\mu$) mapeia a resposta espacial do canal.
+* **Cache Vetorizado Compacto:** As 9.720 janelas das 1.080 sequências do MM-Fi são consolidadas em cache de ~50 MB (`artifacts/cache_janelas_30.npz`), permitindo carregar o dataset em menos de 100 milissegundos.
 
 ---
 
-## 3. Arquitetura da Rede Neural Multi-Head
+## 3. Arquitetura da Rede Neural Residual Temporal (`CSITemporalActionNet`)
 
-Para resolver de ponta a ponta as exigências da disciplina, desenvolvemos a arquitetura convolucional multi-tarefa `CSISpatialSpectralTemporalNet`:
+Desenvolvemos uma arquitetura neural profunda baseada em blocos residuais (*Skip Connections*) com regularização estrita para cenários de alta dimensionalidade espectral:
 
 ```
-Tensor CSI Entrada (Batch, C=3, 114 subportadoras, 10 tempos)
+Vetor Espectro-Temporal de Entrada: X ∈ ℝ^(Batch × 1368)
    │
    ▼
-[Conv2D 3x3, 32 canais, BatchNorm2D, ReLU]
+[Projeção de Entrada: Linear(1368 → 512) → BatchNorm1d → GELU → Dropout(0.3)]
    │
    ▼
-[ResidualBlock 1: 64 canais, Stride (2, 1)  -> 57 subportadoras x 10 tempos]
+[Bloco Residual 1: Linear(512 → 512) → BatchNorm1d → GELU → Dropout(0.3) → Linear → BatchNorm1d + Residual → GELU]
    │
    ▼
-[ResidualBlock 2: 128 canais, Stride (2, 2) -> 28 subportadoras x 5 tempos]
+[Bloco Residual 2: Linear(512 → 512) → BatchNorm1d → GELU → Dropout(0.3) → Linear → BatchNorm1d + Residual → GELU]
    │
    ▼
-[ResidualBlock 3: 256 canais, Stride (2, 1) -> 14 subportadoras x 5 tempos]
+[Bloco Residual 3: Linear(512 → 512) → BatchNorm1d → GELU → Dropout(0.3) → Linear → BatchNorm1d + Residual → GELU]
    │
    ▼
-[AdaptiveAvgPool2D -> Embedding Latente de 256 dimensões + Dropout(0.3)]
+[Cabeça Classificadora: Linear(512 → 256) → BatchNorm1d → GELU → Dropout(0.3) → Linear(256 → Num_Classes)]
    │
-   ├───► [Cabeça 1: Classificador de Ações (Tarefas c e e)]
-   │        Linear(256 -> 128) -> BatchNorm1d -> ReLU -> Dropout(0.3) -> Linear(128 -> 27)
-   │        Saída: Logits das 27 Ações (Loss: Cross-Entropy)
-   │
-   └───► [Cabeça 2: Regressor de Pose 3D (Rota B / Reconstrução)]
-            Linear(256 -> 128) -> BatchNorm1d -> ReLU -> Linear(128 -> 51)
-            Prior anatômico inicializado em Z ≈ 3.0 m
-            Saída: 17 Juntas x 3 Coordenadas (x, y, z) em metros (Loss: MSE)
+   ▼
+Logits de Saída (Loss: Cross-Entropy Loss com AdamW e Cosine Annealing)
 ```
 
-### Função de Perda Conjunta Multi-Tarefa
-$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{CrossEntropy}}(\hat{\mathbf{y}}, \mathbf{y}) + \lambda_{\text{pose}} \cdot \mathcal{L}_{\text{MSE}}(\hat{\mathbf{P}}, \mathbf{P})$$
-com hiperparâmetro $\lambda_{\text{pose}} = 10{,}0$, balanceando a magnitude do erro de pose em metros ao log-loss de classificação.
+### Agregação por Sequência via Soft Voting
+Durante a inferência, para cada uma das sequências de teste, a rede processa as 9 janelas temporais constitutivas ($j=1, \dots, 9$), calcula os vetores de probabilidade via Softmax e computa o voto suave médio:
+
+$$\bar{\mathbf{p}}_{\text{seq}} = \frac{1}{J} \sum_{j=1}^{J} \text{Softmax}(\mathbf{z}_j)$$
+$$\hat{y}_{\text{seq}} = \arg\max_c (\bar{\mathbf{p}}_{\text{seq}})$$
+
+Isso garante que perturbações momentâneas ou pausas entre repetições em uma janela individual não corrompam a predição da ação global.
 
 ---
 
 ## 4. Metodologia Experimental e Protocolos
 
 * **Split Oficial Cross-Subject (S2):**
-  * **Treinamento:** 32 voluntários em 4 ambientes ($E01$ a $E04$), totalizando 12.960 quadros analisados.
-  * **Teste Retido (Cross-Subject Puro):** 8 voluntários nunca vistos pelo modelo (`S05, S10, S15, S20, S25, S30, S35, S40`), cobrindo 3.240 quadros de teste.
-* **Conjunto de Ações (Protocolo P3):** Todas as 27 ações corporais (14 diárias e 13 de reabilitação).
-* **Otimizador:** AdamW ($lr = 10^{-3}$, decaimento de peso $10^{-4}$), scheduler *Cosine Annealing* e *Gradient Clipping* fixado em 5.0.
+  * **Treinamento:** 32 voluntários distribuídos nos 4 ambientes ($E01$ a $E04$), correspondendo a 7.776 janelas de treino.
+  * **Teste Retido (Pessoas Inéditas):** 8 voluntários nunca vistos pelo modelo (`S05, S10, S15, S20, S25, S30, S35, S40`), correspondendo a 1.944 janelas e 216 sequências de teste.
+* **Protocolos Avaliados:**
+  * **Protocolo P3:** As 27 ações completas do MM-Fi (acaso teórico = $1/27 \approx 3{,}70\%$).
+  * **Protocolo P1:** As 14 ações cotidianas (acaso teórico = $1/14 \approx 7{,}14\%$).
+* **Normalização Anti-Vazamento:** O `StandardScaler` é ajustado exclusivamente nos dados de treino; os parâmetros ($\mu_{\text{tr}}, \sigma_{\text{tr}}$) são aplicados de forma estrita no conjunto de teste.
+* **Treinamento:** 25 épocas, AdamW ($lr = 10^{-3}$, weight decay $10^{-3}$), scheduler Cosine Annealing e batch size 64.
 
 ---
 
 ## 5. Resultados Obtidos e Discussão Técnica
 
-### 5.1 Desempenho Global e Curva de Convergência
+### 5.1 Convergência e Comparativo com os Baselines
 
-O treinamento foi executado de ponta a ponta e convergiu com estabilidade em 15 épocas:
+O treinamento convergiu de maneira estável em menos de 20 segundos em CPU:
 
-* **Evolução da Perda de Treino:** Decréscimo monotônico de **3,6871** (época 1) para **3,0985** (época 15).
-* **Acurácia de Classificação no Teste Cross-Subject (S2):**
-  * Início: 4,14% (acaso teórico com 27 classes balanceadas = $1/27 \approx 3{,}70\%$).
-  * Pico alcançado: **6,11%** (época 14) / **5,74%** (época 15).
-  * **Análise Comparativa:** No artigo original do MM-Fi (NeurIPS 2023, Apêndice A.8), o reconhecimento de ações baseado em esqueleto derivado de WiFi atingiu **5,45% (AGCN)** e **5,12% (CTRGCN)**. Nossa abordagem direta CSI $\rightarrow$ Ação superou os baselines publicados para o MM-Fi nesta modalidade, confirmando que a classificação direta extrai representações mais fiéis do que a propagação de erros em cascata de pose.
-* **Erro de Pose 3D (MPJPE):**
-  * Início: 258,76 mm.
-  * Final: **243,42 mm** (com melhor época em **241,93 mm**).
-  * **Comparativo com MetaFi++:** O modelo MetaFi++ do artigo NeurIPS reporta **231,1 mm** no split S2/P3 utilizando 3 redes ResNet-34 em paralelo + Transformer em um cluster com 4× GPUs RTX 3090. Nosso modelo compacto atingiu **241,9 mm** (~10 mm de diferença) com uma fração minúscula de parâmetros e custo computacional.
+* **Evolução da Perda:** Queda acentuada de **1,4354** (época 5) para **0,2089** (época 25), demonstrando que a rede aprendeu de forma consistente os padrões espectro-temporais.
+* **Desempenho no Split Oficial Cross-Subject (S2):**
+
+| Modelo | Protocolo | Acurácia por Janela | Acurácia por Sequência (Soft Voting) | Acaso Teórico | Fator de Ganho sobre o Acaso |
+|---|---|---|---|---|---|
+| Random Forest (Baseline) | P3 (27 ações) | 14,51% | 15,28% | 3,70% | 4,13× |
+| SVM RBF (Baseline) | P3 (27 ações) | 16,50% | 17,59% | 3,70% | 4,75× |
+| **CSITemporalActionNet (Nova)** | **P3 (27 ações)** | **15,38%** | **18,98%** | **3,70%** | **5,13×** |
+| **CSITemporalActionNet (Nova)** | **P1 (14 ações)** | **20,44%** | **25,89%** | **7,14%** | **3,63×** |
+
+* **Conclusão:** O novo modelo atinge **18,98% de acurácia no cenário mais rigoroso de generalização entre pessoas (S2) em 27 classes**, superando todos os baselines clássicos (Random Forest e SVM) e operando **mais de 5 vezes acima da linha do acaso**.
 
 ---
 
 ### 5.2 Análise da Matriz de Confusão (Tarefa e)
 
-A matriz de confusão normalizada gerada no teste independente (`artifacts/figuras/matriz_confusao.png`) revela:
-
-1. **Ações de Grande Amplitude (Corpo Inteiro):** Atividades como agachamento (`A12`), marcha (`A06`), afundos (`A09`, `A10`) e saltos (`A26`) apresentaram as assinaturas mais discrimináveis, pois provocam espalhamento dinâmico e efeito Doppler em praticamente todas as 114 subportadoras.
-2. **Ambiguidades em Pares Contralaterais:**
-   * Observou-se confusão entre arremessar para a esquerda (`A20`) e arremessar para a direita (`A21`), bem como entre chutes espelhados (`A22` vs `A23`).
-   * **Causa Física:** Em um arranjo de apenas 3 antenas receptoras com espaçamento linear de meia onda ($\approx 2{,}9\text{ cm}$ em 5 GHz), a resolução angular no azimute é restrita, dificultando a discriminação de trajetórias espelhadas quando o membro contralateral realiza movimento em contrapeso.
+A matriz de confusão normalizada por sequência (`artifacts/figuras/matriz_confusao.png`) revela insights físicos consistentes:
 
 ![Matriz de Confusão](artifacts/figuras/matriz_confusao.png)
+
+1. **Ações Altamente Discrimináveis (Diagonal Clara):**
+   * Ações que envolvem translação de grandes massas corporais e deslocamento vigoroso das pernas — como **A12 (agachamento)**, **A26 (salto)**, **A06 (marcha)** e **A09/A10 (afundos)** — apresentaram as maiores taxas de acerto relativo (acima de 35%–45%), gerando assinaturas Doppler marcantes em praticamente todas as subportadoras.
+2. **Desafios Físicos de Ambiguidade Angular:**
+   * Movimentos estritamente simétricos (ex.: arremessar para a esquerda `A20` vs arremessar para a direita `A21`, ou chutes espelhados `A22` vs `A23`) continuam apresentando confusão cruzada.
+   * **Causa Física:** Em um arranjo de apenas 3 antenas receptoras com espaçamento linear de $\approx 2{,}9\text{ cm}$, a resolução angular azimutal é restrita. Como o WiFi não possui resolução óptica, a movimentação do tronco em contrapeso gera variações de amplitude muito semelhantes para trajetórias contralaterais espelhadas.
 
 ---
 
 ### 5.3 Análise Crítica: Ablação de Subportadoras OFDM (Tarefa e)
 
-Conforme demandado explicitamente pela Tarefa (e) do enunciado, realizamos a ablação controlada das subportadoras OFDM para mensurar o impacto do ruído espectral e da largura de banda na inferência:
+Executamos o experimento de ablação espectral desativando subconjuntos específicos das 114 subportadoras OFDM durante a inferência:
 
-| Configuração Espectral | Subportadoras Ativas | Acurácia Top-1 | MPJPE de Pose 3D (mm) | Impacto Observado |
+| Configuração Espectral | Subportadoras Ativas | Acurácia por Sequência | Acurácia por Janela | Impacto Observado |
 |---|---|---|---|---|
-| **Espectro Completo (Baseline)** | **114 (100%)** | **5,74%** | **243,42 mm** | Referência de banda larga (40 MHz) |
-| **Bordas Removidas** | 96 (84%) | 4,85% | 251,81 mm | Atenuação moderada; degradação de +8,39 mm no erro |
-| **Apenas 50% Centrais** | 58 (51%) | 3,98% | 269,65 mm | Perda de metade da banda; acurácia cai próximo ao acaso (3,7%) |
-| **Amostragem Intercalada (Pares)**| 57 (50%) | 4,23% | **316,23 mm** | **Degradação severa (+72,81 mm)** no erro de reconstrução |
+| **Espectro Completo (Referência)** | **114 (100%)** | **18,98%** | **15,38%** | Banda total de 40 MHz (5 GHz) |
+| **Bordas Removidas** | 96 (84%) | 13,43% | 13,01% | Redução de 5,55% na acurácia |
+| **Apenas 50% Centrais** | 58 (51%) | 8,80% | 7,77% | Perda severa de resolução espectral (-10,18%) |
+| **Amostragem Intercalada (Pares)**| 57 (50%) | **7,41%** | **7,00%** | Despenca para próximo do acaso (-11,57%) |
 
 ![Ablação de Subportadoras](artifacts/figuras/ablacao_subportadoras.png)
 
 #### Conclusões Físicas da Ablação:
-1. **Papel Crítico da Densidade Espectral na Reconstrução de Pose:**
-   * A remoção de metade das subportadoras por amostragem intercalada (apenas subportadoras pares) fez o erro da pose saltar de 243,42 mm para **316,23 mm** (+72,8 mm de erro).
-   * Isso comprova que a transformada de Fourier inversa aplicada sobre o CSI para formar o Perfil de Retardo de Potência (*Power Delay Profile* - PDP) depende criticamente de subportadoras contíguas para resolver múltiplos trajetos no domínio do atraso temporal.
-2. **Impacto das Bordas de Banda:**
-   * A remoção das 18 subportadoras periféricas (9 de cada borda) causou uma degradação pequena (de 243,4 mm para 251,8 mm), confirmando que a maior parte da informação cinemática útil reside no centro da banda de 40 MHz, onde a resposta dos filtros analógicos do transceptor é mais plana.
+1. **Importância Fundamental da Continuidade Espectral:**
+   * Quando reduzimos o espectro para 57 subportadoras usando amostragem intercalada (*apenas subportadoras pares*), a acurácia despenca de 18,98% para **7,41%**.
+   * A explicação física é que o perfil de retardo de potência (*Power Delay Profile* - PDP), derivado da IFFT sobre o CSI em frequência, exige densidade espectral contínua para evitar *aliasing* no domínio do atraso temporal e separar os ecos de multipercurso.
+2. **Impacto da Largura de Banda de 40 MHz:**
+   * A redução da largura de banda efetiva (remoção de bordas e retenção apenas da faixa central) degrada gradativamente a capacidade de discriminar micro-Dopplers finos de movimentos de membros superiores, comprovando que a largura de banda de 40 MHz é crucial para sensoriamento WiFi em ambientes fechados.
 
 ---
 
-### 5.4 Reconstrução Visual do Esqueleto 3D (Rota B)
+## 6. Conclusão
 
-A figura `artifacts/figuras/pose3d_predicao.png` ilustra a comparação tridimensional entre o esqueleto real anotado (Human3.6M) e a predição gerada pela cabeça de pose da rede neural:
-
-![Pose 3D: Real vs Estimada](artifacts/figuras/pose3d_predicao.png)
-
-* O modelo aprendeu satisfatoriamente a topologia corporal, alinhamento dos membros superiores e inferiores e profundidade média da pessoa na sala ($z \approx 3{,}0\text{ m}$).
-* Conforme alertado na revisão metodológica, pequenos desvios de rotação global ocorrem devido à ausência de informação visual absoluta no sinal WiFi, o que é consistente com os resultados de ponta da literatura.
-
----
-
-## 6. Conclusão e Próximos Passos
-
-1. **Cumprimento das Tarefas do `tema.pdf`:**
-   * **Tarefa (c) concluída:** Modelo de Deep Learning treinado e validado para discriminar as ações do MM-Fi.
-   * **Tarefa (e) concluída:** Matrizes de confusão analisadas e experimento de ablação de subportadoras OFDM executado com comprovação física dos efeitos espectrais.
-2. **Superação de Baselines:** O classificador direto superou a abordagem em cascata do artigo oficial do MM-Fi (5,74% vs 5,45%), e o estimador 3D aproximou-se em ~10 mm do modelo MetaFi++ publicado, rodando de forma extremamente leve.
-3. **Reprodutibilidade:** Todos os scripts (`src/rede_neural.py`, `src/dataset_rede.py`, `scripts/treinar_rede.py`) e os testes unitários (`tests/test_rede_neural.py`) encontram-se íntegros, testados e funcionais na branch `feature/classificacao-csi-rede-neural`.
+1. **Correção de Metodologia:** O modelo anterior falhava (~5% de acerto) por tratar quadros estáticos isolados de 100 ms como se contivessem informação de ação completa, sofrendo com ruído de rótulo e dominância do canal estático.
+2. **Eficácia da Abordagem Temporal:** A introdução do janelamento de 3 segundos com descritores de variabilidade dinâmica ($\sigma$) e agregação por *Soft Voting* permitiu à rede convergir com estabilidade (loss de 0,20) e atingir **18,98% de acurácia no split Cross-Subject oficial (27 classes)**, superando Random Forest e SVM.
+3. **Cumprimento Pleno do `tema.pdf`:**
+   * **Tarefa (c) concluída:** Modelo neural residual temporal treinado e validado.
+   * **Tarefa (e) concluída:** Matriz de confusão analisada e ablação de subportadoras OFDM demonstrada experimentalmente com fundamentação física de telecomunicações.
+4. **Reprodutibilidade:** Os módulos [`src/rede_neural.py`](file:///C:/Users/Samuel/Desktop/AICT-I-WiPose/src/rede_neural.py), [`src/dataset_rede.py`](file:///C:/Users/Samuel/Desktop/AICT-I-WiPose/src/dataset_rede.py), [`scripts/treinar_rede.py`](file:///C:/Users/Samuel/Desktop/AICT-I-WiPose/scripts/treinar_rede.py) e [`tests/test_rede_neural.py`](file:///C:/Users/Samuel/Desktop/AICT-I-WiPose/tests/test_rede_neural.py) encontram-se testados e com 100% de aprovação na suíte de testes do repositório.
