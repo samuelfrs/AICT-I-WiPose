@@ -13,6 +13,15 @@ para amplitude e para fase sanitizada::
 
 São 4 × 3 × 114 = 1.368 atributos. A média capta o perfil estático do canal; o
 desvio, o quanto o corpo em movimento o perturba.
+
+Normalização por sequência (ML-02, experimento)
+-----------------------------------------------
+Opcionalmente, cada sequência inteira (297 quadros) é normalizada **antes** do
+janelamento, separadamente por antena × subportadora e separadamente para
+amplitude e fase, com estatísticas calculadas sobre quadros × amostras daquela
+sequência só (nunca sobre mais de uma). ``media`` subtrai a média; ``zscore``
+subtrai a média e divide pelo desvio. A ideia é apagar a "assinatura" estática
+que cada sujeito deixa no canal. O padrão continua ``nenhuma``.
 """
 
 from typing import Dict, List, Sequence, Tuple
@@ -22,6 +31,53 @@ import numpy as np
 from src.mmfi import N_ANTENAS, N_QUADROS, N_SUBPORTADORAS
 
 N_ATRIBUTOS = 4 * N_ANTENAS * N_SUBPORTADORAS  # 1.368
+
+MODOS_NORMALIZACAO = ("nenhuma", "media", "zscore")
+
+
+def _validar_modo(modo: str) -> None:
+    if modo not in MODOS_NORMALIZACAO:
+        raise ValueError(
+            f"normalização inválida: {modo!r}. "
+            f"Modos válidos: {', '.join(MODOS_NORMALIZACAO)}."
+        )
+
+
+def normalizar_sequencia(x: np.ndarray, modo: str = "nenhuma") -> np.ndarray:
+    """Normaliza **uma** sequência ``(quadros, 3, 114, 10)`` por antena × subportadora.
+
+    Estatísticas sobre quadros (eixo 0) × amostras temporais (eixo 3) desta
+    sequência:
+
+    - ``nenhuma``: devolve a entrada sem alteração (o mesmo objeto);
+    - ``media``: ``x - média``;
+    - ``zscore``: ``(x - média) / desvio``. Onde o desvio é (numericamente)
+      zero — sinal constante —, o resultado é 0, sem NaN nem inf.
+
+    Chamar uma vez para a amplitude e outra para a fase. Só ``media`` e
+    ``zscore`` conferem a forma e devolvem float32; ``nenhuma`` não confere
+    nada e devolve a entrada como veio.
+    """
+    _validar_modo(modo)
+    if modo == "nenhuma":
+        return x
+    x = np.asarray(x)
+    if x.ndim != 4 or x.shape[1:3] != (N_ANTENAS, N_SUBPORTADORAS):
+        raise ValueError(
+            f"Esperado (quadros, {N_ANTENAS}, {N_SUBPORTADORAS}, tempo), "
+            f"obtido {x.shape}."
+        )
+    x64 = x.astype(np.float64)
+    media = x64.mean(axis=(0, 3), keepdims=True)
+    centrado = x64 - media
+    if modo == "media":
+        return centrado.astype(np.float32)
+    desvio = centrado.std(axis=(0, 3), keepdims=True)
+    # Desvio "zero" relativo à escala do sinal: o arredondamento de um sinal
+    # constante deixa resíduos da ordem de 1e-16 × |média|.
+    constante = desvio <= 1e-9 * (np.abs(media) + 1.0)
+    saida = np.divide(centrado, desvio, out=np.zeros_like(centrado), where=~constante)
+    return saida.astype(np.float32)
 
 
 def janelas_de_sequencia(
@@ -80,6 +136,7 @@ def montar_conjunto(
     acoes: Sequence[str],
     janela: int = 30,
     passo: int = None,
+    normalizacao: str = "nenhuma",
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Monta ``(X, y, grupos)`` a partir do cache, uma sequência por vez.
 
@@ -89,7 +146,10 @@ def montar_conjunto(
       bootstrap — janelas da mesma sequência não são independentes)
 
     Lê do memmap só a sequência da vez (~4 MB por array), nunca o cache inteiro.
+    ``normalizacao`` (ver :func:`normalizar_sequencia`) é aplicada à sequência
+    inteira antes do janelamento, igual para treino e teste.
     """
+    _validar_modo(normalizacao)
     intervalos = janelas_de_sequencia(amp.shape[1], janela, passo)
     codigo = {a: i for i, a in enumerate(acoes)}
     n = len(sequencias) * len(intervalos)
@@ -100,8 +160,8 @@ def montar_conjunto(
     k = 0
     for g, (sujeito, acao) in enumerate(sequencias):
         linha = linhas[(sujeito, acao)]
-        a_seq = np.asarray(amp[linha])
-        f_seq = np.asarray(fase[linha])
+        a_seq = normalizar_sequencia(np.asarray(amp[linha]), normalizacao)
+        f_seq = normalizar_sequencia(np.asarray(fase[linha]), normalizacao)
         blocos_a = np.stack([a_seq[i:f] for i, f in intervalos])
         blocos_f = np.stack([f_seq[i:f] for i, f in intervalos])
         m = len(intervalos)

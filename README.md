@@ -32,7 +32,8 @@ O projeto implementou duas abordagens complementares de aprendizado de máquina 
 
 ### 1. Baselines Clássicos de Machine Learning (RF e SVM)
 * **Arquivos:** [`scripts/treinar_baseline.py`](scripts/treinar_baseline.py), [`src/atributos.py`](src/atributos.py), [`src/avaliacao.py`](src/avaliacao.py).
-* **Método:** Extrai atributos estatísticos de amplitude por subportadora (média, desvio padrão, percentis, energia espectral) sobre janelas temporais e treina classificadores **Random Forest** e **SVM**.
+* **Método:** Corta cada sequência em janelas de 3 s (30 quadros) e extrai **média e desvio padrão** por antena × subportadora, da amplitude e da fase sanitizada (1.368 atributos); treina **Random Forest** ou **SVM**. A divisão treino/teste é sempre por sequência inteira (S2 oficial ou S1 agrupado), sem vazamento.
+* **Normalização por sequência (ML-02, experimento):** `--normalizacao nenhuma|media|zscore` e `--diagnostico-sujeito` (mede quanto os atributos identificam a pessoa). Resultado e leitura em [`docs/resumo-do-projeto.md`](docs/resumo-do-projeto.md).
 * **Resultados e Métricas:** Salvos em `artifacts/resultados/baseline_*.json` com intervalos de confiança por bootstrap e matrizes de confusão em `artifacts/figuras/confusao_*.png`.
 
 ### 2. Rede Neural Convolucional Multi-Head (Deep Learning)
@@ -108,7 +109,8 @@ python scripts/treinar_rede.py --split S2 --protocolo P3 --epocas 15 --batch-siz
 ### 4. Executar os Baselines Clássicos (Random Forest e SVM)
 
 ```powershell
-python scripts/treinar_baseline.py
+python scripts/treinar_baseline.py --protocolo s2 --modelo rf
+python scripts/treinar_baseline.py --protocolo s2 --modelo rf --normalizacao zscore --diagnostico-sujeito
 ```
 
 ### 5. Inspecionar Amostras Individuais do MM-Fi (Tarefa b)
