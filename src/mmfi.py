@@ -107,6 +107,7 @@ def caminho_dataset(raiz: Optional[Union[str, Path]] = None) -> Path:
     """Diretório raiz do MM-Fi (o que contém E01..E04).
 
     Ordem de busca: argumento explícito -> variável de ambiente ``MMFI_DATASET``
+    -> ``dataset/MMFi_leve`` dentro do repositório (se existir)
     -> ``~/Downloads/datas/MMFi_Dataset``. Assim cada integrante da equipe aponta
     para o caminho da própria máquina sem editar código.
     """
@@ -116,6 +117,9 @@ def caminho_dataset(raiz: Optional[Union[str, Path]] = None) -> Path:
         return Path(raiz).expanduser()
     if (bruto := os.environ.get("MMFI_DATASET")):
         return Path(bruto).expanduser()
+    leve_no_repositorio = Path(__file__).resolve().parent.parent / "dataset" / "MMFi_leve"
+    if leve_no_repositorio.is_dir():
+        return leve_no_repositorio
     return Path.home() / "Downloads" / "datas" / "MMFi_Dataset"
 
 

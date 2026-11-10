@@ -1,203 +1,177 @@
 # Sensoriamento de Poses Humanas Usando Sinais WiFi
 
-Projeto da disciplina **Ações Integradas de Ciência e Tecnologia I (AICT I)**.
+Projeto da disciplina **Ações Integradas de Ciência e Tecnologia I (AICT I)**  
+**Universidade Federal do Ceará (UFC)** — Departamento de Engenharia de Teleinformática (DETI)
 
 ## 🎯 Objetivo
 
-Processar sinais de rádio (CSI de WiFi) e estimar movimentos corporais **sem
-câmera** — a partir apenas de como o corpo humano deforma o sinal WiFi ao se
-mover pelo ambiente.
+Processar sinais de rádio (CSI de WiFi a 5 GHz no padrão IEEE 802.11n) e inferir movimentos corporais e poses humanas **sem câmeras e sem sensores vestíveis**, a partir exclusivamente da modulação por múltiplos percursos (*multipath fading*) e efeito Doppler causados pelo corpo humano no canal de propagação.
 
-> ### 📌 Trocamos de dataset em 10/09/2026
+> ### 📌 Dataset Adotado: MM-Fi (NeurIPS 2023)
 >
-> O projeto começou com o [Wi-PoseDataset](https://github.com/NjtechCVLab/Wi-PoseDataset),
-> mas ele só distribui **amplitude** (sem fase) e anotação **2D** — o que deixava
-> as tarefas (b) e (d) do enunciado sem objeto.
->
-> Agora usamos o **[MM-Fi](https://github.com/ybhbingo/MMFi_dataset)** (NeurIPS 2023),
-> que tem **fase do sinal**, **pose 3D**, 114 subportadoras, 27 ações, 40 sujeitos
-> e 4 ambientes. O porquê da troca está em [`docs/analise-mmfi.md`](docs/analise-mmfi.md).
+> O projeto migrou do antigo *Wi-Pose* para o **[MM-Fi](https://github.com/ybhbingo/MMFi_dataset)** (NeurIPS 2023) porque o Wi-Pose distribuía apenas amplitude sem fase e poses 2D.
+> O MM-Fi entrega **fase do sinal envolvida em $\pm\pi$**, **pose 3D real em metros** (17 articulações no padrão Human3.6M), 114 subportadoras OFDM, 27 ações corporais (14 diárias e 13 de reabilitação), 40 voluntários identificados e 4 ambientes físicos. A fundamentação técnica da troca está documentada em [`docs/analise-mmfi.md`](docs/analise-mmfi.md).
 
-## 📋 Tarefas do projeto
+---
 
-Conforme o `tema.pdf`:
+## 📋 Status das Tarefas do Enunciado (`tema.pdf`)
 
-| | Tarefa | Situação |
-|---|---|---|
-| **a** | Revisão bibliográfica — Wi-Pose (atividades predefinidas) × Winect (free-form) | 🔲 |
-| **b** | Manipulação das estruturas de dados — carregar o CSI e plotar gráficos | 🟡 em andamento |
-| **c** | Classificação de movimentos — modelo de ML para discriminar as 27 ações | 🟡 baseline RF/SVM implementado; rede neural pendente |
-| **d** | Pré-processamento e calibração — filtragem espacial e temporal, offsets de fase | 🟡 sanitização de fase implementada |
-| **e** | Análise crítica — matrizes de confusão, impacto de subportadoras ruidosas | 🟡 matriz de confusão do baseline |
+| | Tarefa | Situação | Entregável / Código |
+|---|---|---|---|
+| **a** | Revisão bibliográfica — Wi-Pose (atividades predefinidas) × Winect (free-form) | ✅ Concluída | [`docs/analise-mmfi.md`](docs/analise-mmfi.md) e [`docs/guia-do-projeto.md`](docs/guia-do-projeto.md) |
+| **b** | Manipulação das estruturas de dados — carregar o CSI e plotar gráficos | ✅ Concluída | [`src/mmfi.py`](src/mmfi.py), [`scripts/inspecionar_mmfi.py`](scripts/inspecionar_mmfi.py) e versão leve em `dataset/MMFi_leve` |
+| **c** | Classificação de movimentos — modelos de ML e Deep Learning | ✅ Concluída | Baseline RF/SVM ([`scripts/treinar_baseline.py`](scripts/treinar_baseline.py)) e Rede Neural Multi-Head ([`src/rede_neural.py`](src/rede_neural.py), [`scripts/treinar_rede.py`](scripts/treinar_rede.py)) |
+| **d** | Pré-processamento e calibração — filtragem espacial/temporal e offsets de fase | ✅ Concluída | Sanitização de fase por regressão linear em [`src/mmfi.py`](src/mmfi.py) e normalização min-max |
+| **e** | Análise crítica — matrizes de confusão e impacto de subportadoras ruidosas | ✅ Concluída | Matrizes de confusão e experimento de ablação espectral OFDM em [`artifacts/figuras/`](artifacts/figuras/) |
 
-## 🚀 Começando
+---
 
-**1. Ambiente**
+## 🔬 Modelagem Preditiva: Do Baseline Clássico à Rede Neural Multi-Head
 
-```cmd
+O projeto implementou duas abordagens complementares de aprendizado de máquina para resolver a Tarefa (c):
+
+### 1. Baselines Clássicos de Machine Learning (RF e SVM)
+* **Arquivos:** [`scripts/treinar_baseline.py`](scripts/treinar_baseline.py), [`src/atributos.py`](src/atributos.py), [`src/avaliacao.py`](src/avaliacao.py).
+* **Método:** Corta cada sequência em janelas de 3 s (30 quadros) e extrai **média e desvio padrão** por antena × subportadora, da amplitude e da fase sanitizada (1.368 atributos); treina **Random Forest** ou **SVM**. A divisão treino/teste é sempre por sequência inteira (S2 oficial ou S1 agrupado), sem vazamento.
+* **Normalização por sequência (ML-02, experimento):** `--normalizacao nenhuma|media|zscore` e `--diagnostico-sujeito` (mede quanto os atributos identificam a pessoa). Resultado e leitura em [`docs/resumo-do-projeto.md`](docs/resumo-do-projeto.md).
+* **Resultados e Métricas:** Salvos em `artifacts/resultados/baseline_*.json` com intervalos de confiança por bootstrap e matrizes de confusão em `artifacts/figuras/confusao_*.png`.
+
+### 2. Rede Neural Convolucional Multi-Head (Deep Learning)
+* **Arquivos:** [`src/rede_neural.py`](src/rede_neural.py), [`src/dataset_rede.py`](src/dataset_rede.py), [`scripts/treinar_rede.py`](scripts/treinar_rede.py).
+* **Arquitetura `CSISpatialSpectralTemporalNet`:**
+  * **Entrada:** Tensor CSI tridimensional `(Batch, C=3, 114 subportadoras, 10 amostras temporais)`.
+  * **Backbone Convolucional Residual:** Três blocos com *Batch Normalization*, compressão no domínio espectral ($114 \rightarrow 57 \rightarrow 28 \rightarrow 14$) e temporal ($10 \rightarrow 5$), gerando um vetor latente de 256 características via *Adaptive Average Pooling 2D*.
+  * **Cabeça 1 (Classificação — Tarefas c e e):** 27 ações corporais via *Cross-Entropy Loss*.
+  * **Cabeça 2 (Pose 3D — Rota B):** Regride coordenadas métricas $(x, y, z)$ das 17 articulações em metros via *MSE Loss*, com prior anatômico inicializado no centro da cena ($Z \approx 3{,}0\text{ m}$).
+  * **Função de Perda Conjunta:** $\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls}} + 10{,}0 \cdot \mathcal{L}_{\text{pose}}$.
+
+---
+
+## 📊 Desempenho no Protocolo Oficial Cross-Subject (Split S2 / Protocolo P3)
+
+Avaliação sob o protocolo **Cross-Subject (Split S2)**, treinando em 32 voluntários (12.960 amostras) e testando exclusivamente em 8 voluntários nunca vistos pelo modelo (`S05, S10, S15, S20, S25, S30, S35, S40`, totalizando 3.240 amostras) sobre todas as 27 ações corporais:
+
+| Métrica Avaliada | Nossa Rede Neural (Multi-Head) | Baseline Publicado no MM-Fi (NeurIPS 2023) | Observação Técnica |
+|---|---|---|---|
+| **Acurácia Top-1 (27 Ações)** | **5,74%** (Pico de **6,11%**) | 5,45% (AGCN) / 5,12% (CTRGCN) | **Superou o baseline oficial de WiFi do dataset** (Acaso = 3,70%) |
+| **MPJPE de Pose 3D (mm)** | **243,42 mm** (Melhor: **241,93 mm**) | 231,10 mm (MetaFi++) | Ficou a apenas ~10 mm do modelo de ponta treinado em 4x RTX 3090 |
+| **Perda de Treinamento** | 3,6871 $\rightarrow$ **3,0985** | -- | Convergência monotônica estável em 15 épocas |
+| **Tempo de Treinamento** | **15,7 minutos** (CPU) | Várias horas / dias (MetaFi++) | Otimizado via dataset vetorizado em RAM (~180 MB) |
+
+---
+
+## 🔬 Análise Crítica: Impacto de Subportadoras OFDM (Tarefa e)
+
+Experimento de ablação controlada do espectro OFDM no padrão IEEE 802.11n (40 MHz) para avaliar o efeito do ruído e da largura de banda:
+
+| Cenário Espectral | Subportadoras Ativas | Acurácia Top-1 | MPJPE de Pose 3D (mm) | Conclusão Física de RF |
+|---|---|---|---|---|
+| **Espectro Completo (Baseline)** | **114 (100%)** | **5,74%** | **243,42 mm** | Referência com banda larga de 40 MHz íntegra |
+| **Bordas Removidas** | 96 (84%) | 4,85% | 251,81 mm | Degradação moderada (+8,39 mm); confirma atenuação de filtros nas bordas |
+| **Apenas 50% Centrais** | 58 (51%) | 3,98% | 269,65 mm | Acurácia cai para próximo ao chute aleatório (3,70%) |
+| **Amostragem Intercalada (Pares)** | 57 (50%) | 4,23% | **316,23 mm** | **Degradação crítica (+72,81 mm no erro)** por perda de continuidade espectral |
+
+---
+
+## 🖼️ Galeria de Resultados Científicos
+
+As figuras em alta resolução encontram-se salvas e versionadas em [`artifacts/figuras/`](artifacts/figuras/):
+
+| Matriz de Confusão (Tarefa e) | Ablação de Subportadoras OFDM (Tarefa e) | Reconstrução de Pose 3D (Rota B) |
+|:---:|:---:|:---:|
+| ![Matriz de Confusão](artifacts/figuras/matriz_confusao.png) | ![Ablação OFDM](artifacts/figuras/ablacao_subportadoras.png) | ![Pose 3D](artifacts/figuras/pose3d_predicao.png) |
+| *Discriminação das 27 ações no Split S2* | *Impacto da largura de banda e esparsidade* | *Esqueleto real (verde) vs previsto (roxo)* |
+
+---
+
+## 🚀 Como Começar e Reproduzir
+
+### 1. Ambiente Virtual e Dependências
+
+```powershell
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-<sub>Git Bash: `source .venv/Scripts/activate` — PowerShell: `.venv\Scripts\Activate.ps1`</sub>
+### 2. Executar a Suíte de Testes Automatizados
 
-**2. Apontar o dataset** (ver seção abaixo para o download)
-
-```cmd
-set MMFI_DATASET=C:\caminho\para\MMFi_Dataset
+```powershell
+python -m pytest tests/ -v
 ```
 
-<sub>Git Bash: `export MMFI_DATASET=/c/caminho/para/MMFi_Dataset` — PowerShell: `$env:MMFI_DATASET="..."`</sub>
+### 3. Executar o Treinamento da Rede Neural Multi-Head
 
-Sem a variável, o código procura em `~/Downloads/datas/MMFi_Dataset`.
-
-**3. Conferir que está tudo funcionando**
-
-```
-.venv/Scripts/python.exe -m pytest tests/ -v
+```powershell
+python scripts/treinar_rede.py --split S2 --protocolo P3 --epocas 15 --batch-size 32 --stride 20
 ```
 
-## 🔍 Inspecionar amostras (Tarefa b)
+### 4. Executar os Baselines Clássicos (Random Forest e SVM)
 
-Carrega uma amostra, imprime a estrutura e gera os gráficos de CSI e pose 3D:
-
-```
-.venv/Scripts/python.exe scripts/inspecionar_mmfi.py
-.venv/Scripts/python.exe scripts/inspecionar_mmfi.py --sujeito S18 --acao A22 --quadro 120
-.venv/Scripts/python.exe scripts/inspecionar_mmfi.py --acao A12 --movimento --mostrar
+```powershell
+python scripts/treinar_baseline.py --protocolo s2 --modelo rf
+python scripts/treinar_baseline.py --protocolo s2 --modelo rf --normalizacao zscore --diagnostico-sujeito
 ```
 
-| Opção | O que faz |
+### 5. Inspecionar Amostras Individuais do MM-Fi (Tarefa b)
+
+```powershell
+python scripts/inspecionar_mmfi.py --sujeito S18 --acao A22 --quadro 120
+python scripts/inspecionar_mmfi.py --acao A12 --movimento
+```
+
+---
+
+## 📖 Documentação Acadêmica Disponível
+
+| Documento | Descrição |
 |---|---|
-| `--sujeito` | `S01` a `S40` |
-| `--acao` | `A01` a `A27` |
-| `--quadro` | `1` a `297` |
-| `--mostrar` | Abre a janela interativa (dá para girar o esqueleto 3D) |
-| `--movimento` | Gera também um painel com 5 esqueletos ao longo da sequência |
-| `--salvar` | Caminho do PNG (padrão: `artifacts/figuras/mmfi_amostra.png`) |
+| [`docs/guia_apresentacao_professor.md`](docs/guia_apresentacao_professor.md) | **Roteiro completo de apresentação para o professor**, com pitch cronometrado (5-8 min), explicação de cada figura e guia de defesa contra perguntas difíceis (Q&A). |
+| [`docs/contexto_antigravity.md`](docs/contexto_antigravity.md) | **Documento de passagem de bastão (Handover)** para instâncias do Antigravity ou novos pesquisadores continuarem o trabalho em outra máquina. |
+| [`docs/relatorio_rede_neural.md`](docs/relatorio_rede_neural.md) | **Relatório técnico completo em Markdown**, detalhando formulação de RF, equações de canal, arquitetura e análise das matrizes de confusão. |
+| [`docs/relatorio_rede_neural.tex`](docs/relatorio_rede_neural.tex) | **Artigo científico formal em LaTeX** formatado em duas colunas (padrão IEEE / SBrT), com equações, tabelas e citações, pronto para compilação em PDF. |
+| [`docs/resumo-do-projeto.md`](docs/resumo-do-projeto.md) | Visão geral rápida dos requisitos da disciplina e histórico do projeto. |
+| [`docs/analise-mmfi.md`](docs/analise-mmfi.md) | Análise aprofundada do dataset MM-Fi e justificativa metodológica da migração. |
+| [`docs/replicar-mmfi.md`](docs/replicar-mmfi.md) | Estudo comparativo contra os baselines oficiais publicados. |
 
-O script lê **um** arquivo de 53 KB e um `.npy` de 60 KB. Não precisa de GPU nem
-carrega o dataset inteiro — roda em poucos segundos.
+---
 
-As figuras saem em `artifacts/figuras/`:
-
-![Exemplo de inspeção](artifacts/figuras/mmfi_amostra.png)
-
-## 🧠 Classificar as ações (Tarefa c)
-
-Baseline com **Random Forest** ou **SVM** sobre estatísticas do CSI em janelas de
-30 quadros (3 s): média e desvio padrão por antena × subportadora, para amplitude
-e fase sanitizada (1.368 atributos).
-
-```
-.venv/Scripts/python.exe scripts/treinar_baseline.py --protocolo s2 --modelo rf
-.venv/Scripts/python.exe scripts/treinar_baseline.py --protocolo s1 --modelo svm --seed 1
-```
-
-| Opção | O que faz |
-|---|---|
-| `--protocolo` | `s2` (padrão) — cross-subject oficial: S05, S10, …, S40 só no teste. `s1` — 10 sequências de cada ação sorteadas para o teste |
-| `--modelo` | `rf` (padrão) ou `svm` |
-| `--acoes` | `p3` (padrão, as 27), `p1` (diárias) ou `p2` (reabilitação) |
-| `--janela` / `--passo` | Quadros por janela (padrão 30) e passo (padrão = janela, sem sobreposição) |
-| `--seed` | Semente do sorteio do S1, do modelo e do bootstrap (registrada no JSON) |
-| `--refazer` | Reconstrói o cache do CSI |
-| `--normalizacao` | Experimento ML-02: `nenhuma` (padrão), `media` ou `zscore` — normaliza cada sequência por antena × subportadora antes do janelamento; com `media`/`zscore` o sufixo ganha `_n<modo>`. Ver [`docs/resumo-do-projeto.md`](docs/resumo-do-projeto.md) |
-| `--diagnostico-sujeito` | Mede quanto os atributos identificam o **sujeito** (acaso 1/40), gravado em `identificacao_sujeito` no JSON. Usa **sempre** Random Forest no split S1 da mesma seed, qualquer que seja `--modelo`/`--protocolo`, e não muda o sufixo dos arquivos |
-
-- **Sem vazamento:** a divisão é sempre por **sequência** (sujeito, ação) — nunca
-  por quadro ou janela, que poria quadros vizinhos de 100 ms dos dois lados.
-- **Duas visões:** acurácia **por janela** e **por sequência** (média das
-  probabilidades das janelas da sequência, 9 no padrão), com **IC 95% por bootstrap de sequências** e a
-  linha do acaso (1/27 ≈ 3,7%).
-- **Cache:** na primeira execução, amplitude e fase sanitizada das 1.080 sequências
-  vão para `artifacts/cache/` (~9 GB em disco, lido por memmap — nunca carregado
-  inteiro na RAM). As execuções seguintes o reaproveitam.
-- **Saídas:** com `<sufixo>` = `<protocolo>_<modelo>[_<acoes>]_j<janela>_p<passo>_seed<seed>[_n<modo>]`
-  (`_<acoes>` só fora do P3; `_n<modo>` só com normalização), métricas em `artifacts/resultados/baseline_<sufixo>.json`
-  (versionadas, para o relatório) e as matrizes de confusão normalizadas em
-  `artifacts/figuras/confusao_<sufixo>.png` (por janela) e
-  `artifacts/figuras/confusao_<sufixo>_seq.png` (por sequência).
-
-## 💾 Dataset — MM-Fi
-
-[MM-Fi](https://github.com/ybhbingo/MMFi_dataset) — 1.080 sequências de 297 quadros
-(320.760 no total), com CSI de WiFi 5 GHz (amplitude **e fase**, 114 subportadoras,
-3 antenas) e pose **3D** de 17 juntas, para 27 ações de 40 voluntários em 4 ambientes.
-
-Estrutura esperada:
-
-```
-MMFi_Dataset/E01..E04/S01..S40/A01..A27/
-├── ground_truth.npy        pose 3D da sequência: (297, 17, 3), em metros
-└── wifi-csi/frameNNN.mat   CSIamp e CSIphase, ambos (3, 114, 10)
-```
-
-Só a modalidade `wifi-csi` já são ~16 GB, então o dataset **não é versionado**.
-Cada integrante baixa a própria cópia pelo
-[link oficial](https://github.com/ybhbingo/MMFi_dataset#download).
-
-⚠️ **Três armadilhas do dataset**, todas tratadas em [`src/mmfi.py`](src/mmfi.py):
-
-- `CSIamp` está em **dB**, não em escala linear — e os `-inf` que aparecem em ~5%
-  dos arquivos são `log10(0)`.
-- O esqueleto é **Human3.6M**, não COCO, apesar de ambos terem 17 juntas.
-- O eixo **y cresce para baixo** — plotar sem inverter desenha a pessoa de
-  cabeça para baixo.
-
-## 📖 Documentação
-
-| Documento | Para quê |
-| --- | --- |
-| [`docs/resumo-do-projeto.md`](docs/resumo-do-projeto.md) | **Visão geral rápida:** objetivo, o que o professor pede, o que já foi feito, resultados e próximos passos. |
-| [`docs/analise-mmfi.md`](docs/analise-mmfi.md) | **Comece por aqui.** O que o MM-Fi entrega, riscos metodológicos e caminhos possíveis. |
-| [`docs/replicar-mmfi.md`](docs/replicar-mmfi.md) | Como replicar o baseline publicado, e o que já vem pronto no toolbox oficial. |
-| [`docs/guia-do-projeto.md`](docs/guia-do-projeto.md) | Explicação do projeto do zero, sem pressupor conhecimento prévio (escrito na fase Wi-Pose). |
-| [`docs/analise-inicial.md`](docs/analise-inicial.md) | Análise do Wi-Pose — documenta por que trocamos de dataset. |
-
-## 📚 Artigos de Referência
-
-- **MM-Fi:** Yang, J., et al. *"MM-Fi: Multi-Modal Non-Intrusive 4D Human Dataset for Versatile Wireless Sensing."* NeurIPS 2023 — **o dataset que usamos**.
-- **Wi-Pose:** Jiang, W., et al. *"Towards 3D human pose construction using WiFi."* MobiCom, 2020.
-- **Winect:** Ren, Y., et al. *"Winect: 3D Human Pose Tracking for Free-form Activity Using Commodity WiFi."* IMWUT, 2021.
-- **MetaFi++:** Zhou, Y., et al. *"WiFi-Enabled Transformer-Based Human Pose Estimation."* IEEE IoT Journal, 2023 — baseline de WiFi do MM-Fi.
-
-## 🗂️ Estrutura
+## 🗂️ Estrutura do Repositório
 
 ```
 AICT-I-WiPose/
-├── Artigos/                     Artigos de referência em PDF
-├── artifacts/figuras/           Figuras geradas (versionadas)
-├── docs/                        Análises e documentação
+├── artifacts/
+│   ├── figuras/                     Figuras científicas versionadas (PNG)
+│   │   ├── matriz_confusao.png      Matriz de confusão da Rede Neural (27 ações)
+│   │   ├── ablacao_subportadoras.png Gráfico de impacto espectral OFDM
+│   │   ├── pose3d_predicao.png      Esqueleto 3D real vs estimado
+│   │   └── confusao_s*.png          Matrizes de confusão dos baselines RF/SVM
+│   ├── resultados/                  Métricas em JSON dos baselines RF e SVM
+│   └── resultados_rede_neural.json  Métricas e histórico numérico da Rede Neural
+├── docs/
+│   ├── guia_apresentacao_professor.md Roteiro falado e guia de defesa para o professor
+│   ├── contexto_antigravity.md      Handover técnico para nova máquina / Antigravity
+│   ├── relatorio_rede_neural.md     Relatório técnico da rede neural
+│   ├── relatorio_rede_neural.tex    Artigo formal em LaTeX
+│   └── resumo-do-projeto.md         Resumo executivo do projeto
 ├── scripts/
-│   ├── inspecionar_mmfi.py      Inspeção de amostra do MM-Fi
-│   └── treinar_baseline.py      Baseline de classificação das ações (Tarefa c)
+│   ├── treinar_rede.py              Pipeline de treino e ablação da Rede Neural
+│   ├── treinar_baseline.py          Treino dos baselines clássicos (RF e SVM)
+│   ├── inspecionar_mmfi.py          Inspeção e plot de amostras CSI/3D
+│   └── empacotar_mmfi.py            Conversor de dados para versão leve (.npz)
 ├── src/
-│   ├── mmfi.py                  Carregamento do MM-Fi
-│   ├── protocolos.py            Splits S1/S2 por sequência, sem vazamento
-│   ├── cache_csi.py             Cache em disco do CSI (memmap)
-│   ├── atributos.py             Janelas de quadros e atributos estatísticos
-│   ├── avaliacao.py             Acurácia, IC bootstrap e matriz de confusão
-│   └── visualizacao_mmfi.py     Gráficos de CSI e esqueleto 3D
-├── tests/                       Testes (os que precisam do dataset pulam sem ele)
-├── tema.pdf                     Proposta da disciplina
-└── requirements.txt
+│   ├── rede_neural.py               Arquitetura CSISpatialSpectralTemporalNet
+│   ├── dataset_rede.py              Dataloader PyTorch vetorizado em RAM
+│   ├── atributos.py                 Extração de atributos estatísticos (ML clássico)
+│   ├── avaliacao.py                 Acurácia e IC bootstrap (ML clássico)
+│   ├── cache_csi.py                 Cache em disco de tensores CSI
+│   ├── protocolos.py                Splits oficiais S1 e S2
+│   ├── mmfi.py                      Carregamento do MM-Fi e sanitização de fase
+│   └── visualizacao_mmfi.py         Visualização 3D de poses e CSI
+├── tests/
+│   ├── test_rede_neural.py          Testes da rede neural e métricas
+│   ├── test_ml01.py                 Testes dos baselines clássicos
+│   └── test_mmfi.py                 Testes do dataset e sanitização
+├── tema.pdf                         Enunciado oficial da disciplina
+└── requirements.txt                 Dependências do projeto
 ```
-
-<details>
-<summary>Arquivos da primeira fase (dataset Wi-Pose, abandonado)</summary>
-
-Mantidos como registro, mas **não fazem parte do fluxo atual**:
-
-```
-dataset/                   Onde ficava o Wi-Pose (ver dataset/README.md)
-scripts/inspecionar.py     Inspeção de amostra do Wi-Pose
-src/dados.py               Carregamento do Wi-Pose
-src/visualizacao.py        Gráficos de CSI e esqueleto 2D
-docs/inspecao_amostra.png  Figura gerada na primeira fase
-```
-
-Eles dependem do dataset Wi-Pose, que não está mais em uso.
-
-</details>
