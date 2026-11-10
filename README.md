@@ -103,6 +103,8 @@ e fase sanitizada (1.368 atributos).
 | `--janela` / `--passo` | Quadros por janela (padrão 30) e passo (padrão = janela, sem sobreposição) |
 | `--seed` | Semente do sorteio do S1, do modelo e do bootstrap (registrada no JSON) |
 | `--refazer` | Reconstrói o cache do CSI |
+| `--normalizacao` | Experimento ML-02: `nenhuma` (padrão), `media` ou `zscore` — normaliza cada sequência por antena × subportadora antes do janelamento; com `media`/`zscore` o sufixo ganha `_n<modo>`. Ver [`docs/resumo-do-projeto.md`](docs/resumo-do-projeto.md) |
+| `--diagnostico-sujeito` | Mede quanto os atributos identificam o **sujeito** (acaso 1/40), gravado em `identificacao_sujeito` no JSON. Usa **sempre** Random Forest no split S1 da mesma seed, qualquer que seja `--modelo`/`--protocolo`, e não muda o sufixo dos arquivos |
 
 - **Sem vazamento:** a divisão é sempre por **sequência** (sujeito, ação) — nunca
   por quadro ou janela, que poria quadros vizinhos de 100 ms dos dois lados.
@@ -112,8 +114,8 @@ e fase sanitizada (1.368 atributos).
 - **Cache:** na primeira execução, amplitude e fase sanitizada das 1.080 sequências
   vão para `artifacts/cache/` (~9 GB em disco, lido por memmap — nunca carregado
   inteiro na RAM). As execuções seguintes o reaproveitam.
-- **Saídas:** com `<sufixo>` = `<protocolo>_<modelo>[_<acoes>]_j<janela>_p<passo>_seed<seed>`
-  (`_<acoes>` só fora do P3), métricas em `artifacts/resultados/baseline_<sufixo>.json`
+- **Saídas:** com `<sufixo>` = `<protocolo>_<modelo>[_<acoes>]_j<janela>_p<passo>_seed<seed>[_n<modo>]`
+  (`_<acoes>` só fora do P3; `_n<modo>` só com normalização), métricas em `artifacts/resultados/baseline_<sufixo>.json`
   (versionadas, para o relatório) e as matrizes de confusão normalizadas em
   `artifacts/figuras/confusao_<sufixo>.png` (por janela) e
   `artifacts/figuras/confusao_<sufixo>_seq.png` (por sequência).
