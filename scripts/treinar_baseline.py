@@ -10,6 +10,7 @@ Uso:
     .venv/Scripts/python.exe scripts/treinar_baseline.py --protocolo s2 --modelo rf
     .venv/Scripts/python.exe scripts/treinar_baseline.py --protocolo s1 --modelo svm --seed 1
     .venv/Scripts/python.exe scripts/treinar_baseline.py --protocolo s2 --normalizacao zscore --diagnostico-sujeito
+    .venv/Scripts/python.exe scripts/treinar_baseline.py --protocolo s2 --atributos base,dop_amp,dop_cm
 
 Na primeira execução o cache do CSI é construído em artifacts/cache/ (~9 GB em
 disco, alguns minutos). As seguintes o reaproveitam.
@@ -20,8 +21,19 @@ Opções do ML-02 (experimento; o padrão não muda nada em relação ao ML-01):
     --diagnostico-sujeito                 mede quanto os atributos identificam o
                                           sujeito (RF no split S1, acaso 1/40)
 
-Saídas, com <sufixo> = <protocolo>_<modelo>[_<acoes>]_j<janela>_p<passo>_seed<seed>[_n<modo>]
-(``_n<modo>`` só quando a normalização não é ``nenhuma``):
+Opção do ML-03 (o padrão, ``base``, não muda nada em relação ao ML-01/02):
+    --atributos base,antenas,dop_amp,dop_cm   conjuntos de atributos por janela,
+                                          concatenados na ordem dada (ver
+                                          src/doppler.py). Os três além de
+                                          ``base`` vêm de um cache próprio em
+                                          artifacts/cache_atributos/ (~6 min na
+                                          primeira vez; relê o dataset).
+                                          ``--refazer`` reconstrói também esse cache.
+                                          A normalização vale só para ``base``.
+
+Saídas, com <sufixo> = <protocolo>_<modelo>[_<acoes>]_j<janela>_p<passo>_seed<seed>[_n<modo>][_a<conjuntos>]
+(``_n<modo>`` só quando a normalização não é ``nenhuma``; ``_a<conjuntos>``,
+com os conjuntos unidos por ``-``, só quando não é só ``base``):
     artifacts/resultados/baseline_<sufixo>.json
     artifacts/figuras/confusao_<sufixo>.png       matriz por janela
     artifacts/figuras/confusao_<sufixo>_seq.png   matriz por sequência
@@ -44,12 +56,16 @@ RAIZ_PROJETO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ_PROJETO))
 
 from src.atributos import (  # noqa: E402
+    ATRIBUTOS_PADRAO,
+    CONJUNTOS_ATRIBUTOS,
     MODOS_NORMALIZACAO,
+    validar_atributos,
     janelas_de_sequencia,
     montar_conjunto,
 )
 from src.avaliacao import avaliar, ic_bootstrap, salvar_matriz_confusao  # noqa: E402
 from src.cache_csi import abrir_cache, construir_cache  # noqa: E402
+from src.doppler import abrir_cache_atributos, construir_cache_atributos  # noqa: E402
 from src.mmfi import (  # noqa: E402
     N_QUADROS,
     PROTOCOLO_1,
@@ -92,16 +108,28 @@ def criar_modelo(nome: str, seed: int):
 
 
 def montar_sufixo(protocolo: str, modelo: str, acoes: str, janela: int,
-                  passo: int, seed: int, normalizacao: str = "nenhuma") -> str:
+                  passo: int, seed: int, normalizacao: str = "nenhuma",
+                  atributos=ATRIBUTOS_PADRAO) -> str:
     """Sufixo único de JSON e figuras.
 
-    Execuções com outra janela, passo, seed ou normalização não podem
-    sobrescrever umas às outras. Sem normalização, o nome é o mesmo do ML-01.
+    Execuções com outra janela, passo, seed, normalização ou atributos não
+    podem sobrescrever umas às outras. Sem normalização e só com ``base``, o
+    nome é o mesmo do ML-01.
     """
+    atributos = validar_atributos(atributos)
     return (f"{protocolo}_{modelo}"
             + ("" if acoes == "p3" else f"_{acoes}")
             + f"_j{janela}_p{passo}_seed{seed}"
-            + ("" if normalizacao == "nenhuma" else f"_n{normalizacao}"))
+            + ("" if normalizacao == "nenhuma" else f"_n{normalizacao}")
+            + ("" if atributos == ATRIBUTOS_PADRAO else "_a" + "-".join(atributos)))
+
+
+def ler_atributos(texto: str):
+    """Tipo do argparse para ``--atributos``: ``"base,dop_amp"`` -> tupla validada."""
+    try:
+        return validar_atributos(texto)
+    except ValueError as erro:
+        raise argparse.ArgumentTypeError(str(erro)) from erro
 
 
 def juntar_para_diagnostico(X_tr, g_tr, treino, X_te, g_te, teste):
@@ -176,13 +204,22 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--raiz", default=None, help="Caminho do MM-Fi (padrão: MMFI_DATASET)")
     parser.add_argument("--cache", default=str(RAIZ_PROJETO / "artifacts" / "cache"))
-    parser.add_argument("--refazer", action="store_true", help="Reconstrói o cache do zero")
+    parser.add_argument("--refazer", action="store_true",
+                        help="Reconstrói o cache do CSI do zero e, se --atributos pedir "
+                             "conjuntos além de base, também o cache de atributos")
     parser.add_argument("--normalizacao", choices=MODOS_NORMALIZACAO, default="nenhuma",
                         help="normalização por sequência antes do janelamento "
                              "(experimento ML-02; padrão: nenhuma)")
     parser.add_argument("--diagnostico-sujeito", action="store_true",
                         help="mede quanto os atributos identificam o sujeito "
                              "(RF no split S1 da mesma seed; acaso 1/40)")
+    parser.add_argument("--atributos", type=ler_atributos, default=ATRIBUTOS_PADRAO,
+                        help="conjuntos separados por vírgula, concatenados nessa ordem "
+                             f"({', '.join(CONJUNTOS_ATRIBUTOS)}; padrão: base). "
+                             "Experimento ML-03")
+    parser.add_argument("--cache-atributos",
+                        default=str(RAIZ_PROJETO / "artifacts" / "cache_atributos"),
+                        help="cache dos atributos de Doppler/antenas")
     args = parser.parse_args()
 
     try:
@@ -193,12 +230,18 @@ def main() -> int:
 
     inicio = time.time()
     print(f"--> Cache do CSI em: {args.cache}")
+    cache_atributos = None
     try:
         construir_cache(args.cache, args.raiz, refazer=args.refazer)
-    except FileNotFoundError as erro:
+        amp, fase, linhas = abrir_cache(args.cache)
+        if args.atributos != ATRIBUTOS_PADRAO:
+            print(f"--> Cache de atributos (Doppler/antenas) em: {args.cache_atributos}")
+            construir_cache_atributos(args.cache_atributos, args.raiz, args.janela,
+                                      args.passo, refazer=args.refazer)
+            cache_atributos = abrir_cache_atributos(args.cache_atributos)
+    except (FileNotFoundError, ValueError) as erro:
         print(f"ERRO: {erro}")
         return 1
-    amp, fase, linhas = abrir_cache(args.cache)
 
     acoes = tuple(sorted(CONJUNTOS_DE_ACOES[args.acoes]))
     if args.protocolo == "s1":
@@ -211,11 +254,15 @@ def main() -> int:
           f"{len(teste)} de teste")
 
     print(f"--> Extraindo atributos (janela={args.janela}, passo={args.passo or args.janela}, "
-          f"normalização={args.normalizacao})")
+          f"normalização={args.normalizacao}, atributos={','.join(args.atributos)})")
     X_tr, y_tr, g_tr = montar_conjunto(amp, fase, linhas, treino, acoes, args.janela,
-                                       args.passo, normalizacao=args.normalizacao)
+                                       args.passo, normalizacao=args.normalizacao,
+                                       atributos=args.atributos,
+                                       cache_atributos=cache_atributos)
     X_te, y_te, g_te = montar_conjunto(amp, fase, linhas, teste, acoes, args.janela,
-                                       args.passo, normalizacao=args.normalizacao)
+                                       args.passo, normalizacao=args.normalizacao,
+                                       atributos=args.atributos,
+                                       cache_atributos=cache_atributos)
     print(f"    treino {X_tr.shape}, teste {X_te.shape}")
 
     print(f"--> Treinando {args.modelo.upper()} (seed={args.seed})")
@@ -266,7 +313,7 @@ def main() -> int:
 
     passo = args.passo or args.janela
     sufixo = montar_sufixo(args.protocolo, args.modelo, args.acoes, args.janela,
-                           passo, args.seed, args.normalizacao)
+                           passo, args.seed, args.normalizacao, args.atributos)
     resultado = {
         "protocolo": args.protocolo,
         "modelo": args.modelo,
@@ -275,6 +322,8 @@ def main() -> int:
         "passo": passo,
         "seed": args.seed,
         "normalizacao": args.normalizacao,
+        "atributos": list(args.atributos),
+        "n_atributos": int(X_tr.shape[1]),
         "hiperparametros": hiperparametros,
         "versoes": {
             "sklearn": sklearn.__version__,
@@ -300,6 +349,8 @@ def main() -> int:
     pasta_figuras = RAIZ_PROJETO / "artifacts" / "figuras"
     rotulo_norm = ("" if args.normalizacao == "nenhuma"
                    else f" — normalização {args.normalizacao}")
+    if args.atributos != ATRIBUTOS_PADRAO:
+        rotulo_norm += f" — atributos {'+'.join(args.atributos)}"
     for visao, nome, final in (("por_janela", "por janela", ""),
                                ("por_sequencia", "por sequência", "_seq")):
         m = metricas[visao]

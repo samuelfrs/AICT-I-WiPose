@@ -13,6 +13,9 @@ Protocolos
   o S1 mede o cenário "pessoa conhecida".
 - **S2 (oficial)** — cross-subject do toolbox do MM-Fi: os 8 sujeitos de
   ``SUJEITOS_TESTE_S2`` (2 por ambiente) só aparecem no teste.
+- **Validação do S2** (ML-03) — para escolher atributos, hiperparâmetros ou
+  época sem olhar o teste: ``SUJEITOS_VALIDACAO_S2`` (1 por ambiente, nenhum
+  do teste) saem do treino do S2 e viram a validação.
 
 ⚠️ Cada sujeito está em um único ambiente (docs/analise-mmfi.md §2), então o S2
 também retém parte de cada ambiente — não é um eixo independente do S3.
@@ -28,6 +31,9 @@ import numpy as np
 from src.mmfi import ACOES, PROTOCOLO_3, SUJEITOS_TESTE_S2
 
 SUJEITOS = tuple(f"S{i:02d}" for i in range(1, 41))
+
+# Um por ambiente (S01–S10 = E01, …), nenhum de SUJEITOS_TESTE_S2.
+SUJEITOS_VALIDACAO_S2 = ("S04", "S14", "S24", "S34")
 
 Sequencia = Tuple[str, str]
 Divisao = Tuple[List[Sequencia], List[Sequencia]]
@@ -58,6 +64,30 @@ def dividir_s2(acoes: Sequence[str] = PROTOCOLO_3) -> Divisao:
     treino = [seq for seq in todas if seq[0] not in SUJEITOS_TESTE_S2]
     teste = [seq for seq in todas if seq[0] in SUJEITOS_TESTE_S2]
     return treino, teste
+
+
+def separar_validacao(
+    treino: Sequence[Sequencia],
+    sujeitos_validacao: Sequence[str] = SUJEITOS_VALIDACAO_S2,
+) -> Divisao:
+    """Separa ``treino`` em ``(restante, validacao)`` pelos sujeitos de validação.
+
+    Mantém a ordem de ``treino`` dos dois lados.
+    """
+    validos = set(sujeitos_validacao)
+    validacao = [seq for seq in treino if seq[0] in validos]
+    restante = [seq for seq in treino if seq[0] not in validos]
+    return restante, validacao
+
+
+def dividir_validacao_s2(acoes: Sequence[str] = PROTOCOLO_3) -> Divisao:
+    """Treino do S2 dividido em ``(treino_sem_validacao, validacao)``.
+
+    A validação são as sequências de ``SUJEITOS_VALIDACAO_S2``; o teste do S2
+    não entra em nenhum dos dois lados.
+    """
+    treino, _ = dividir_s2(acoes)
+    return separar_validacao(treino, SUJEITOS_VALIDACAO_S2)
 
 
 def dividir_s1_agrupado(
