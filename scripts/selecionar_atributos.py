@@ -51,8 +51,13 @@ sys.path.insert(0, str(RAIZ_PROJETO / "scripts"))
 
 from src.atributos import janelas_de_sequencia, montar_conjunto, validar_atributos  # noqa: E402
 from src.avaliacao import agregar_por_sequencia, avaliar  # noqa: E402
-from src.mmfi import N_QUADROS, PROTOCOLO_3, SUJEITOS_TESTE_S2, ambiente_do_sujeito  # noqa: E402
-from src.protocolos import SUJEITOS_VALIDACAO_S2, dividir_s2, separar_validacao  # noqa: E402
+from src.mmfi import N_QUADROS, PROTOCOLO_3, ambiente_do_sujeito  # noqa: E402
+from src.protocolos import (  # noqa: E402
+    SUJEITOS_VALIDACAO_S2,
+    conferir_validacao,
+    dividir_s2,
+    separar_validacao,
+)
 from treinar_baseline import criar_modelo  # noqa: E402
 
 CANDIDATOS: Tuple[Tuple[str, ...], ...] = (
@@ -186,22 +191,6 @@ def escolher(validacao: List[Dict]) -> Tuple[str, ...]:
                          -par[0]),
     )[1]
     return tuple(melhor["atributos"])
-
-
-def conferir_validacao(seqs_treino, seqs_teste, sujeitos_validacao) -> None:
-    """Validação disjunta do teste, dentro do treino e com um sujeito por ambiente."""
-    sujeitos_teste = {s for s, _ in seqs_teste}
-    sujeitos_treino = {s for s, _ in seqs_treino}
-    validacao = set(sujeitos_validacao)
-    if not validacao:
-        raise ValueError("Sem sujeitos de validação.")
-    no_teste = validacao & (sujeitos_teste | set(SUJEITOS_TESTE_S2))
-    if no_teste:
-        raise ValueError(f"Sujeitos de validação no teste: {sorted(no_teste)}.")
-    if not validacao <= sujeitos_treino:
-        raise ValueError(f"Sujeitos de validação fora do treino: {sorted(validacao - sujeitos_treino)}.")
-    if sujeitos_treino & sujeitos_teste:
-        raise ValueError("Vazamento: sujeito no treino e no teste.")
 
 
 def selecionar(
