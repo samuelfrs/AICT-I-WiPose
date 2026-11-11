@@ -1,6 +1,6 @@
 # Resumo do projeto — onde estamos e para onde vamos
 
-**Atualizado em:** 20/10/2026
+**Atualizado em:** 11/11/2026
 
 Um resumo direto do trabalho, para quem chegou agora ou quer se situar. Os
 detalhes técnicos estão nos outros documentos de `docs/`.
@@ -34,6 +34,33 @@ São cinco tarefas, conforme o `tema.pdf`:
 | **e** | Análise crítica | Mostrar onde o programa erra e explicar por quê |
 
 O enunciado pede um modelo **simples** — não exige nada sofisticado.
+
+---
+
+## Resultados em gráficos
+
+Gerados por `scripts/gerar_figuras_resultados.py` a partir dos resultados
+medidos (`artifacts/resultados/`). Explicação de cada um nas seções abaixo.
+
+**1. Qual modelo reconhece melhor a ação de pessoas novas (ML-04)**
+
+![Comparação dos modelos](../artifacts/figuras/resultado_1_comparacao_modelos.png)
+
+**2. O sinal reconhece a pessoa melhor do que a ação (ML-02)**
+
+![Assinatura da pessoa](../artifacts/figuras/resultado_2_assinatura_pessoa.png)
+
+**3. O que o melhor modelo acerta e o que erra (ML-03)**
+
+![Acerto por ação](../artifacts/figuras/resultado_3_acerto_por_acao.png)
+
+**4. Limpeza da fase (tarefa d)**
+
+![Fase sanitizada](../artifacts/figuras/sinal_1_fase_sanitizada.png)
+
+**5. O "ritmo" do movimento — Doppler (ML-03)**
+
+![Doppler](../artifacts/figuras/sinal_2_doppler.png)
 
 ---
 
@@ -287,6 +314,111 @@ Na primeira vez, os atributos de Doppler são calculados a partir do dataset e
 guardados em `artifacts/cache_atributos/` (~6 min medidos, ~80 MB). O padrão do
 `treinar_baseline.py` continua `base`, igual ao de antes.
 
+### Comparação dos modelos (ML-04)
+
+O grupo tem agora **cinco** abordagens para a tarefa (c). Para saber qual é o
+estado real, rodamos todas **na mesma prova** — o teste S2 oficial, com as 8
+pessoas que nenhum modelo viu (216 gravações, 27 ações) — e, quando deu,
+**mais de uma vez** cada, para não depender da sorte de uma rodada:
+
+- **RF base** e **RF + Doppler**: os classificadores do ML-01 e do ML-03
+  (números do `selecao_atributos.json`, 5 seeds).
+- **Rede temporal (ML-04)**: uma rede neural nova, nossa. Cada pedaço de 3 s
+  vira uma sequência de 30 "fotos" do sinal (amplitude e fase das 3 antenas);
+  uma parte convolucional resume cada foto e uma parte recorrente (GRU) lê as
+  30 em ordem, procurando o padrão do movimento no tempo (~286 mil
+  parâmetros). A época final foi escolhida no **simulado** (S04, S14, S24,
+  S34, retirados do treino), e o teste foi avaliado uma vez só. 3 seeds (0,
+  1, 2).
+- **Redes neurais v1 e v2**: as duas versões da rede neural do grupo
+  (`src/rede_neural.py`), rodadas **com o código original, sem nenhuma alteração**, cada uma numa cópia temporária do repositório
+  (`git worktree`) que é apagada no fim. A **v1** (`main`, commit `98a1f49`) é uma
+  CNN multitarefa (ação + pose 3D) que olha **um quadro de 100 ms por vez**; a **v2** (branch `rede-neural-sml`,
+  commit `68d96a9`) é uma rede densa (MLP residual) sobre os atributos de
+  pedaços de 3 s, como os do RF.
+
+Teste S2, média ± desvio entre execuções (seeds):
+
+| Modelo | O que cada amostra é | Acerto por pedaço / quadro | Acerto por gravação | Execuções | Pessoas no treino | Escolhido sem olhar o teste? |
+|---|---|---|---|---|---|---|
+| RF base (ML-01) | pedaço de 3 s | 15,5 ± 0,7% | 18,1 ± 1,7% | 5 | 32 | sim (configuração fixa) |
+| **RF + Doppler (ML-03)** | pedaço de 3 s | **19,0 ± 0,3%** | **23,8 ± 1,1%** | 5 | 32 | sim, no simulado ¹ |
+| Rede temporal (ML-04) | pedaço de 3 s ⁴ | 13,3 ± 0,6% | 14,2 ± 1,8% | 3 | **28** | sim, época no simulado |
+| Rede neural v1 — CNN multitarefa, quadro de 100 ms | **quadro de 100 ms** | 6,1% | — (não mede) | 1 ² | 32 | parcial ³ |
+| Rede neural v2 — MLP sobre atributos de 3 s | pedaço de 3 s | 15,6 ± 0,2% | 18,2 ± 1,3% | 3 | 32 | parcial ³ |
+| *Acaso (1 em 27)* | — | *3,7%* | *3,7%* | — | — | — |
+
+*¹ As 5 combinações candidatas vieram de um protótipo que já tinha olhado o
+teste (ver ML-03). ² Uma execução em vez de 3, por decisão do usuário, por
+tempo: ela dividiu a CPU com a rede temporal e levou ~107 min (medido); como o
+script dela não tem seed, execuções extras só mediriam o ruído do treino.
+³ **Parcial:** os scripts da rede neural v1/v2 reportam a última época (número de épocas
+fixado antes de rodar), então o número não é escolhido pelo teste; mas não há
+simulado — o script mostra o teste a cada época, e o número de épocas e os
+outros hiperparâmetros foram definidos pelo autor, que via o teste. O melhor
+teste entre as épocas teria sido 6,4% (v1) e 19,4–21,3% por gravação (v2),
+perto do reportado. ⁴ Antes de cortar os pedaços, a rede tira de cada gravação
+a média da gravação **inteira** (como a opção `media` do ML-02); então mesmo o
+acerto "por pedaço" dela usa um pouco de informação do resto da gravação.*
+
+*O "acerto por quadro" da v1 não é comparável direto com o "por pedaço" dos
+outros: um quadro de 100 ms tem muito menos informação que 3 s de sinal, e a
+v1 não junta os quadros de uma gravação. Por isso a coluna "por gravação"
+dela fica vazia em vez de receber um número de outra unidade.*
+
+**Quanto confiar nesses números.** O "±" mede só a sorte do treino (seeds
+diferentes), não a incerteza da prova. O IC 95% de cada execução está nos JSON
+do RF e da rede temporal (~±5 pontos por gravação; os JSON da rede neural v1/v2 não
+trazem IC), mas ele sorteia gravações como se fossem independentes, e elas
+vêm de só 8 pessoas — então até esse IC é otimista. E só uma comparação foi
+feita de forma **pareada** (as mesmas gravações, sorteadas juntas): RF +
+Doppler × RF base, no ML-03, em que o Doppler ganhou com IC acima de zero.
+Entre os demais, a tabela mostra o **maior número observado**, não uma
+classificação provada.
+
+**Leitura em linguagem simples:**
+
+- **O RF + Doppler teve o maior número observado**: ~19% por pedaço e ~24%
+  por gravação, 5 a 6 vezes o chute. Nenhuma rede neural chegou perto, mas a
+  diferença para elas não foi testada de forma pareada.
+- **A rede neural v2 ficou praticamente igual ao RF base** (15,6% contra 15,5%
+  por pedaço; 18,2% contra 18,1% por gravação). Faz sentido: ela recebe
+  praticamente os mesmos 1.368 números por pedaço que o RF base (média e
+  desvio por antena × subportadora), só troca a Random Forest por uma rede.
+- **A nossa rede temporal ficou abaixo do RF base** (13,3% contra 15,5% por
+  pedaço). No simulado ela parecia bem melhor (20–25% por gravação na época
+  escolhida), mas o simulado tem só 4 pessoas: escolher a "melhor época" num
+  grupo tão pequeno pega muita sorte, e a melhora não se repetiu nas 8
+  pessoas do teste. Ela também **treinou com menos gente**: 28 pessoas, porque
+  4 ficaram para o simulado e não houve um retreino com as 32 — os outros
+  modelos usaram as 32, então parte da diferença pode ser só quantidade de
+  dados. Outra explicação provável (não testada): com poucas pessoas, uma
+  rede que vê o sinal "cru" aprende detalhes de cada pessoa em vez do
+  movimento; os atributos prontos do RF já resumem o que importa.
+- **A rede neural v1 fica perto do chute** (6,1% contra 3,7%): um quadro de
+  100 ms isolado quase não carrega o movimento. Esse número vem de uma nova
+  execução, sem seed; o README cita 5,74% (pico de 6,11%) de uma execução
+  anterior. Sem seed não dá para reproduzir aquela execução, então a diferença
+  provavelmente é só o ruído entre execuções.
+
+**Como rodar:**
+
+```
+.venv/Scripts/python.exe scripts/treinar_rede_temporal.py --seed 0 1 2
+.venv/Scripts/python.exe scripts/rodar_rede_neural.py
+.venv/Scripts/python.exe scripts/comparar_modelos.py
+```
+
+Resultados em `artifacts/resultados/rede_temporal_s2_seed<seed>.json`,
+`rede_neural_v<1|2>_exec<i>.json` e `comparacao_modelos.json`; matrizes de
+confusão da rede temporal em `artifacts/figuras/confusao_rede_temporal_s2_seed<seed>.png`.
+Tempos medidos aqui, com a CPU dividida entre os treinos: rede temporal
+43–45 min por seed, rede neural v2 5–12 min por execução, v1 ~107 min (o README
+cita ~16 min sozinha, não medido aqui). O script da rede neural v2 usa
+`Optional` sem importá-lo e não chega a rodar; `rodar_rede_neural.py`
+contorna isso sem editar o arquivo original (põe o nome disponível antes de
+executá-lo) e registra o contorno no JSON.
+
 ---
 
 ## 4. O que falta fazer
@@ -297,9 +429,10 @@ guardados em `artifacts/cache_atributos/` (~6 min medidos, ~80 MB). O padrão do
 2. ~~Dar ao classificador o "ritmo" do movimento~~ — feito (ML-03, acima):
    com Doppler, o S2 sobe de ~15,5% para ~19% por pedaço (~24% por gravação),
    com a combinação escolhida no simulado, sem olhar o teste.
-3. **Rede neural** — um modelo mais esperto, inspirado no artigo do Wi-Pose
-   (camadas convolucionais + recorrentes), comparado contra o classificador
-   simples acima. Cabe num notebook sem GPU se for enxuta.
+3. ~~Rede neural comparada ao classificador simples~~ — feito (ML-04, acima):
+   a rede temporal (convolucional + recorrente) e as duas versões da rede neural (v1 e v2)
+   tiveram números menores que o RF + Doppler no S2 (diferença não testada de
+   forma pareada).
 4. **Terminar a análise (e):** quais ações se confundem (ex.: chutar com a
    perna esquerda × direita), se a fase limpa ajuda, quais antenas e
    frequências atrapalham.
@@ -308,8 +441,9 @@ guardados em `artifacts/cache_atributos/` (~6 min medidos, ~80 MB). O padrão do
 7. **Juntar tudo no relatório.**
 
 **Em uma frase:** o trabalho é ensinar o computador a "ver" movimentos pelo
-WiFi; já temos um modelo simples funcionando, 5 a 6 vezes melhor que o chute, e
-agora vamos melhorá-lo com a rede neural e explicar os erros.
+WiFi; o maior número até aqui é o do modelo simples com Doppler (RF +
+Doppler), 5 a 6 vezes o chute — as redes neurais testadas ficaram abaixo dele
+nesta prova —, e agora falta explicar os erros.
 
 ---
 

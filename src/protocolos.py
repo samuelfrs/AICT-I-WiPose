@@ -80,6 +80,22 @@ def separar_validacao(
     return restante, validacao
 
 
+def conferir_validacao(seqs_treino, seqs_teste, sujeitos_validacao) -> None:
+    """Validação disjunta do teste (e de ``SUJEITOS_TESTE_S2``) e contida no treino; treino e teste disjuntos."""
+    sujeitos_teste = {s for s, _ in seqs_teste}
+    sujeitos_treino = {s for s, _ in seqs_treino}
+    validacao = set(sujeitos_validacao)
+    if not validacao:
+        raise ValueError("Sem sujeitos de validação.")
+    no_teste = validacao & (sujeitos_teste | set(SUJEITOS_TESTE_S2))
+    if no_teste:
+        raise ValueError(f"Sujeitos de validação no teste: {sorted(no_teste)}.")
+    if not validacao <= sujeitos_treino:
+        raise ValueError(f"Sujeitos de validação fora do treino: {sorted(validacao - sujeitos_treino)}.")
+    if sujeitos_treino & sujeitos_teste:
+        raise ValueError("Vazamento: sujeito no treino e no teste.")
+
+
 def dividir_validacao_s2(acoes: Sequence[str] = PROTOCOLO_3) -> Divisao:
     """Treino do S2 dividido em ``(treino_sem_validacao, validacao)``.
 

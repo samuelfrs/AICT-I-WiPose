@@ -46,6 +46,29 @@ O projeto implementou duas abordagens complementares de aprendizado de máquina 
   * **Cabeça 2 (Pose 3D — Rota B):** Regride coordenadas métricas $(x, y, z)$ das 17 articulações em metros via *MSE Loss*, com prior anatômico inicializado no centro da cena ($Z \approx 3{,}0\text{ m}$).
   * **Função de Perda Conjunta:** $\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls}} + 10{,}0 \cdot \mathcal{L}_{\text{pose}}$.
 
+### 3. Rede temporal própria e comparação dos modelos (ML-04)
+* **Arquivos:** [`src/rede_temporal.py`](src/rede_temporal.py), [`scripts/treinar_rede_temporal.py`](scripts/treinar_rede_temporal.py), [`scripts/rodar_rede_neural.py`](scripts/rodar_rede_neural.py), [`scripts/comparar_modelos.py`](scripts/comparar_modelos.py).
+* **Rede temporal:** janelas de 3 s (30 quadros); cada quadro vira `(60 canais = amplitude e fase × 3 antenas × 10 amostras, 114 subportadoras)`, com a média da própria sequência subtraída e padronização pelo treino. Codificador `Conv1d` por quadro + GRU bidirecional sobre os 30 quadros (~286 mil parâmetros, ~45 s/época em CPU). A época é escolhida na **validação** (S04, S14, S24, S34 retirados do treino) e o teste S2 é avaliado uma vez.
+* **Redes neurais v1 e v2:** `rodar_rede_neural.py` roda as duas versões (`main` 98a1f49 e `rede-neural-sml` 68d96a9) **sem alterar o código**, em `git worktree` temporários fora do repositório, 3 execuções cada, e copia os JSON para `artifacts/resultados/rede_neural_v<1|2>_exec<i>.json`.
+* **Comparação:** `comparar_modelos.py` junta RF base, RF + Doppler, rede temporal e as duas versões da rede neural (v1 e v2) numa tabela (média ± desvio entre execuções, unidade de cada modelo, como o número é escolhido) em `artifacts/resultados/comparacao_modelos.json`; tabela e leitura no [resumo do projeto](docs/resumo-do-projeto.md).
+* **Cuidados na leitura:** o "±" é só a variação entre seeds; os ICs por execução (só nos JSON do RF e da rede temporal) ignoram que as gravações se agrupam por pessoa (8 no teste) e são otimistas; só RF + Doppler × RF base foi comparado de forma pareada (ML-03). A rede temporal treina com 28 pessoas (4 ficam para a validação, sem retreino); os outros modelos, com 32. Ela também subtrai a média da gravação inteira antes de cortar as janelas, então o número "por janela" dela usa contexto do resto da gravação.
+* **Rede v1 reexecutada no ML-04:** 6,1% por quadro na última época (melhor época 6,4%), 1 execução. Os 5,74% (pico 6,11%) da tabela abaixo são de uma execução anterior; o script não tem seed, então as duas não são reproduzíveis entre si.
+
+---
+
+## 📈 Resultados em gráficos (teste com pessoas novas, S2)
+
+| Comparação dos modelos | Acerto por ação do melhor modelo |
+|:---:|:---:|
+| ![Comparação](artifacts/figuras/resultado_1_comparacao_modelos.png) | ![Acerto por ação](artifacts/figuras/resultado_3_acerto_por_acao.png) |
+| *RF + Doppler 19,0% por pedaço de 3 s / 23,8% por gravação (chute: 3,7%)* | *Ações de corpo inteiro (afundo, agachamento, salto) são as mais fáceis* |
+
+| O sinal identifica a pessoa | Limpeza da fase (tarefa d) | Doppler: o "ritmo" do movimento |
+|:---:|:---:|:---:|
+| ![Assinatura](artifacts/figuras/resultado_2_assinatura_pessoa.png) | ![Fase](artifacts/figuras/sinal_1_fase_sanitizada.png) | ![Doppler](artifacts/figuras/sinal_2_doppler.png) |
+
+Explicação completa no [resumo do projeto](docs/resumo-do-projeto.md). Para regerar: `python scripts/gerar_figuras_resultados.py`.
+
 ---
 
 ## 📊 Desempenho no Protocolo Oficial Cross-Subject (Split S2 / Protocolo P3)
@@ -116,7 +139,17 @@ python scripts/treinar_baseline.py --protocolo s2 --modelo rf --atributos base,d
 python scripts/selecionar_atributos.py
 ```
 
-### 5. Inspecionar Amostras Individuais do MM-Fi (Tarefa b)
+### 5. Rede Temporal Própria e Comparação dos Modelos (ML-04)
+
+```powershell
+python scripts/treinar_rede_temporal.py --seed 0 1 2
+python scripts/rodar_rede_neural.py
+python scripts/comparar_modelos.py
+```
+
+A rede temporal carrega ~4,4 GB em RAM (~45 s); com a CPU dividida entre os treinos, foram medidos 43–45 min por seed. `rodar_rede_neural.py` roda 3 execuções de cada versão (`--versoes`, `--execucoes` para reduzir) e só escreve em `artifacts/resultados/`; medidos aqui, com a CPU dividida: v2 5–12 min por execução (incluindo ~3 min de cache na primeira) e v1 ~107 min (a seção da rede neural cita ~16 min sozinha, não medido aqui). No ML-04 a v1 rodou 1 vez, por tempo.
+
+### 6. Inspecionar Amostras Individuais do MM-Fi (Tarefa b)
 
 ```powershell
 python scripts/inspecionar_mmfi.py --sujeito S18 --acao A22 --quadro 120
@@ -161,6 +194,10 @@ AICT-I-WiPose/
 │   ├── treinar_rede.py              Pipeline de treino e ablação da Rede Neural
 │   ├── treinar_baseline.py          Treino dos baselines clássicos (RF e SVM)
 │   ├── selecionar_atributos.py      Escolha dos atributos por validação (ML-03)
+│   ├── treinar_rede_temporal.py     Treino da rede temporal própria (ML-04)
+│   ├── gerar_figuras_resultados.py  Gráficos de resultados (comparação, assinatura, por ação, fase, Doppler)
+│   ├── rodar_rede_neural.py        Roda as redes neurais v1 e v2 em worktrees (ML-04)
+│   ├── comparar_modelos.py          Tabela de comparação dos modelos no S2 (ML-04)
 │   ├── inspecionar_mmfi.py          Inspeção e plot de amostras CSI/3D
 │   └── empacotar_mmfi.py            Conversor de dados para versão leve (.npz)
 ├── src/
@@ -168,6 +205,7 @@ AICT-I-WiPose/
 │   ├── dataset_rede.py              Dataloader PyTorch vetorizado em RAM
 │   ├── atributos.py                 Extração de atributos estatísticos (ML clássico)
 │   ├── doppler.py                   Atributos de Doppler e entre antenas + cache (ML-03)
+│   ├── rede_temporal.py             Rede temporal própria: Conv1d por quadro + GRU (ML-04)
 │   ├── avaliacao.py                 Acurácia e IC bootstrap (ML clássico)
 │   ├── cache_csi.py                 Cache em disco de tensores CSI
 │   ├── protocolos.py                Splits oficiais S1 e S2
