@@ -34,6 +34,7 @@ O projeto implementou duas abordagens complementares de aprendizado de máquina 
 * **Arquivos:** [`scripts/treinar_baseline.py`](scripts/treinar_baseline.py), [`src/atributos.py`](src/atributos.py), [`src/avaliacao.py`](src/avaliacao.py).
 * **Método:** Corta cada sequência em janelas de 3 s (30 quadros) e extrai **média e desvio padrão** por antena × subportadora, da amplitude e da fase sanitizada (1.368 atributos); treina **Random Forest** ou **SVM**. A divisão treino/teste é sempre por sequência inteira (S2 oficial ou S1 agrupado), sem vazamento.
 * **Normalização por sequência (ML-02, experimento):** `--normalizacao nenhuma|media|zscore` e `--diagnostico-sujeito` (mede quanto os atributos identificam a pessoa). Resultado e leitura em [`docs/resumo-do-projeto.md`](docs/resumo-do-projeto.md).
+* **Atributos de Doppler e entre antenas (ML-03):** `--atributos base,antenas,dop_amp,dop_cm` (lista separada por vírgula, concatenada nessa ordem; padrão `base`, que reproduz o ML-01/02). Os conjuntos novos ([`src/doppler.py`](src/doppler.py)) ficam num cache próprio em `artifacts/cache_atributos/` (~6 min medidos na primeira vez). [`scripts/selecionar_atributos.py`](scripts/selecionar_atributos.py) (só Random Forest, só S2/P3) escolhe a combinação por **validação** (sujeitos S04, S14, S24, S34 retirados do treino, 3 seeds) e só depois avalia o teste S2 com 5 seeds, com comparação pareada contra o `base`; resultado em `artifacts/resultados/selecao_atributos.json` e no resumo do projeto.
 * **Resultados e Métricas:** Salvos em `artifacts/resultados/baseline_*.json` com intervalos de confiança por bootstrap e matrizes de confusão em `artifacts/figuras/confusao_*.png`.
 
 ### 2. Rede Neural Convolucional Multi-Head (Deep Learning)
@@ -111,6 +112,8 @@ python scripts/treinar_rede.py --split S2 --protocolo P3 --epocas 15 --batch-siz
 ```powershell
 python scripts/treinar_baseline.py --protocolo s2 --modelo rf
 python scripts/treinar_baseline.py --protocolo s2 --modelo rf --normalizacao zscore --diagnostico-sujeito
+python scripts/treinar_baseline.py --protocolo s2 --modelo rf --atributos base,dop_amp,dop_cm
+python scripts/selecionar_atributos.py
 ```
 
 ### 5. Inspecionar Amostras Individuais do MM-Fi (Tarefa b)
@@ -157,12 +160,14 @@ AICT-I-WiPose/
 ├── scripts/
 │   ├── treinar_rede.py              Pipeline de treino e ablação da Rede Neural
 │   ├── treinar_baseline.py          Treino dos baselines clássicos (RF e SVM)
+│   ├── selecionar_atributos.py      Escolha dos atributos por validação (ML-03)
 │   ├── inspecionar_mmfi.py          Inspeção e plot de amostras CSI/3D
 │   └── empacotar_mmfi.py            Conversor de dados para versão leve (.npz)
 ├── src/
 │   ├── rede_neural.py               Arquitetura CSISpatialSpectralTemporalNet
 │   ├── dataset_rede.py              Dataloader PyTorch vetorizado em RAM
 │   ├── atributos.py                 Extração de atributos estatísticos (ML clássico)
+│   ├── doppler.py                   Atributos de Doppler e entre antenas + cache (ML-03)
 │   ├── avaliacao.py                 Acurácia e IC bootstrap (ML clássico)
 │   ├── cache_csi.py                 Cache em disco de tensores CSI
 │   ├── protocolos.py                Splits oficiais S1 e S2

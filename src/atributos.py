@@ -22,9 +22,18 @@ amplitude e fase, com estatísticas calculadas sobre quadros × amostras daquela
 sequência só (nunca sobre mais de uma). ``media`` subtrai a média; ``zscore``
 subtrai a média e divide pelo desvio. A ideia é apagar a "assinatura" estática
 que cada sujeito deixa no canal. O padrão continua ``nenhuma``.
+
+Conjuntos de atributos (ML-03)
+------------------------------
+``montar_conjunto`` aceita ``atributos``, uma lista de conjuntos de
+:data:`CONJUNTOS_ATRIBUTOS` concatenados por janela na ordem pedida: ``base``
+(os 1.368 acima) e ``antenas``, ``dop_amp`` e ``dop_cm`` (diferenças entre
+antenas e espectros de Doppler, ver src/doppler.py), lidos de um cache próprio.
+A normalização vale só para ``base``. O padrão, ``("base",)``, reproduz o
+ML-01/02 bit a bit.
 """
 
-from typing import Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -33,6 +42,33 @@ from src.mmfi import N_ANTENAS, N_QUADROS, N_SUBPORTADORAS
 N_ATRIBUTOS = 4 * N_ANTENAS * N_SUBPORTADORAS  # 1.368
 
 MODOS_NORMALIZACAO = ("nenhuma", "media", "zscore")
+
+CONJUNTOS_ATRIBUTOS = ("base", "antenas", "dop_amp", "dop_cm")
+ATRIBUTOS_PADRAO = ("base",)
+
+
+def validar_atributos(atributos: Union[str, Sequence[str]]) -> Tuple[str, ...]:
+    """Normaliza a lista de conjuntos (tupla ou ``"base,dop_amp"``) e valida.
+
+    Mantém a ordem pedida. Lista vazia, conjunto desconhecido ou repetido:
+    ``ValueError`` listando os conjuntos válidos.
+    """
+    if isinstance(atributos, str):
+        atributos = [parte.strip() for parte in atributos.split(",")]
+    atributos = tuple(atributos)
+    validos = ", ".join(CONJUNTOS_ATRIBUTOS)
+    desconhecidos = [a for a in atributos if a not in CONJUNTOS_ATRIBUTOS]
+    if not atributos or desconhecidos:
+        raise ValueError(
+            f"conjunto de atributos inválido: {desconhecidos or 'lista vazia'}. "
+            f"Conjuntos válidos: {validos}."
+        )
+    if len(set(atributos)) != len(atributos):
+        raise ValueError(
+            f"conjunto de atributos repetido em {list(atributos)}. "
+            f"Conjuntos válidos: {validos}."
+        )
+    return atributos
 
 
 def _validar_modo(modo: str) -> None:
@@ -137,35 +173,75 @@ def montar_conjunto(
     janela: int = 30,
     passo: int = None,
     normalizacao: str = "nenhuma",
+    atributos: Union[str, Sequence[str]] = ATRIBUTOS_PADRAO,
+    cache_atributos: Optional[Any] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Monta ``(X, y, grupos)`` a partir do cache, uma sequência por vez.
 
-    - ``X``: ``(n_janelas_total, 1368)``
+    - ``X``: ``(n_janelas_total, d)``, com os conjuntos de ``atributos``
+      concatenados na ordem pedida (``d = 1368`` no padrão, só ``base``)
     - ``y``: índice da ação em ``acoes``
     - ``grupos``: índice da sequência em ``sequencias`` (para agregar e para o
       bootstrap — janelas da mesma sequência não são independentes)
 
     Lê do memmap só a sequência da vez (~4 MB por array), nunca o cache inteiro.
     ``normalizacao`` (ver :func:`normalizar_sequencia`) é aplicada à sequência
-    inteira antes do janelamento, igual para treino e teste.
+    inteira antes do janelamento, igual para treino e teste, e só ao ``base``.
+
+    Os conjuntos além de ``base`` vêm de ``cache_atributos`` (o
+    ``CacheAtributos`` de src/doppler.py), que precisa ter sido construído
+    com a mesma janela e o mesmo passo.
     """
     _validar_modo(normalizacao)
+    atributos = validar_atributos(atributos)
+    if passo is None:
+        passo = janela
     intervalos = janelas_de_sequencia(amp.shape[1], janela, passo)
+    m = len(intervalos)
+
+    dimensoes = []
+    for nome in atributos:
+        if nome == "base":
+            dimensoes.append(N_ATRIBUTOS)
+            continue
+        if cache_atributos is None:
+            raise ValueError(
+                f"o conjunto {nome!r} vem do cache de atributos (src/doppler.py); "
+                "passe cache_atributos."
+            )
+        if (cache_atributos.janela, cache_atributos.passo) != (janela, passo):
+            raise ValueError(
+                f"cache de atributos com janela/passo {cache_atributos.janela}/"
+                f"{cache_atributos.passo}, pedido {janela}/{passo}."
+            )
+        dados = cache_atributos.conjuntos[nome]
+        if dados.shape[1] != m:
+            raise ValueError(
+                f"cache de atributos com {dados.shape[1]} janelas por sequência, "
+                f"esperado {m}."
+            )
+        dimensoes.append(dados.shape[2])
+    colunas = np.concatenate([[0], np.cumsum(dimensoes)])
+
     codigo = {a: i for i, a in enumerate(acoes)}
-    n = len(sequencias) * len(intervalos)
-    X = np.empty((n, N_ATRIBUTOS), dtype=np.float32)
+    n = len(sequencias) * m
+    X = np.empty((n, int(colunas[-1])), dtype=np.float32)
     y = np.empty(n, dtype=np.int64)
     grupos = np.empty(n, dtype=np.int64)
 
     k = 0
     for g, (sujeito, acao) in enumerate(sequencias):
-        linha = linhas[(sujeito, acao)]
-        a_seq = normalizar_sequencia(np.asarray(amp[linha]), normalizacao)
-        f_seq = normalizar_sequencia(np.asarray(fase[linha]), normalizacao)
-        blocos_a = np.stack([a_seq[i:f] for i, f in intervalos])
-        blocos_f = np.stack([f_seq[i:f] for i, f in intervalos])
-        m = len(intervalos)
-        X[k:k + m] = extrair_atributos(blocos_a, blocos_f)
+        for nome, c0, c1 in zip(atributos, colunas[:-1], colunas[1:]):
+            if nome == "base":
+                linha = linhas[(sujeito, acao)]
+                a_seq = normalizar_sequencia(np.asarray(amp[linha]), normalizacao)
+                f_seq = normalizar_sequencia(np.asarray(fase[linha]), normalizacao)
+                blocos_a = np.stack([a_seq[i:f] for i, f in intervalos])
+                blocos_f = np.stack([f_seq[i:f] for i, f in intervalos])
+                X[k:k + m, c0:c1] = extrair_atributos(blocos_a, blocos_f)
+            else:
+                linha = cache_atributos.linhas[(sujeito, acao)]
+                X[k:k + m, c0:c1] = cache_atributos.conjuntos[nome][linha]
         y[k:k + m] = codigo[acao]
         grupos[k:k + m] = g
         k += m
