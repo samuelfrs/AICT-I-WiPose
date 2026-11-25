@@ -358,7 +358,8 @@ def resumo_cdf_por_acao(fontes=FONTES_CDF, pasta: Path = PROBABILIDADES) -> dict
     """Probabilidade da ação certa por janela, separada por ação, para cada modelo.
 
     Devolve ``{"acoes": [...], "modelos": [{"nome", "cor", "arquivo", "acuracia_janela",
-    "por_acao": {acao: {"p_correta": array, "mediana", "acima_do_acaso", "acerto"}}}]}``.
+    "por_acao": {acao: {"p_correta": array, "mediana", "acima_do_acaso", "acerto",
+    "palpites"}}}]}`` (``palpites``: fração de todas as janelas dadas como essa ação).
     Modelos sem arquivo ficam de fora; sem nenhum, ``FileNotFoundError``.
     """
     from src.avaliacao import carregar_probabilidades, probabilidade_da_correta
@@ -378,7 +379,8 @@ def resumo_cdf_por_acao(fontes=FONTES_CDF, pasta: Path = PROBABILIDADES) -> dict
             raise ValueError(f"{arquivo}: ações diferentes das do primeiro modelo.")
         proba, y = dados["probabilidades"], dados["y"]
         p_certa = probabilidade_da_correta(proba, y)
-        acerto = proba.argmax(axis=1) == y
+        palpite = proba.argmax(axis=1)
+        acerto = palpite == y
         acaso = 1.0 / len(acoes)
         por_acao = {}
         for i, acao in enumerate(acoes):
@@ -389,6 +391,7 @@ def resumo_cdf_por_acao(fontes=FONTES_CDF, pasta: Path = PROBABILIDADES) -> dict
                 "mediana": float(np.median(p_certa[m])),
                 "acima_do_acaso": float((p_certa[m] > acaso).mean()),
                 "acerto": float(acerto[m].mean()),
+                "palpites": float((palpite == i).mean()),   # fração de TODAS as janelas
             }
         modelos.append({"nome": nome, "cor": cor, "arquivo": arquivo,
                         "acuracia_janela": float(acerto.mean()), "por_acao": por_acao})
@@ -402,6 +405,18 @@ def _nome_curto(acao: str, limite: int = 24) -> str:
     return nome if len(nome) <= limite else nome[: limite - 1].rstrip() + "…"
 
 
+_NOME_CURTO_MODELO = {"Random Forest + Doppler": "RF", "Rede temporal (CNN + GRU)": "Rede"}
+
+
+def _curto(modelo: dict) -> str:
+    return _NOME_CURTO_MODELO.get(modelo["nome"], modelo["nome"])
+
+
+def _v(x: float) -> str:
+    """Porcentagem com vírgula e uma casa (ex.: 12,6%)."""
+    return f"{100 * x:.1f}%".replace(".", ",")
+
+
 def figura_cdf_por_acao(fontes=FONTES_CDF, pasta: Path = PROBABILIDADES,
                         limite_x: float = 0.5) -> Path:
     """CDF da probabilidade dada à ação certa, um painel por ação (pedido do professor).
@@ -409,9 +424,13 @@ def figura_cdf_por_acao(fontes=FONTES_CDF, pasta: Path = PROBABILIDADES,
     Cada curva diz, para uma ação, em que fração dos pedaços de 3 s o modelo deu
     à ação certa probabilidade ≤ x. Curva mais **à direita e mais baixa** = o
     modelo dá mais confiança à resposta certa. A linha tracejada é o chute (1/27).
-    Os painéis vão da ação mais fácil para a mais difícil (mediana do 1º modelo).
-    O eixo x vai até ``limite_x``: as probabilidades da ação certa raramente
-    passam disso, e a nota de rodapé conta as janelas que ficam de fora.
+
+    A figura se explica sozinha: à esquerda, o painel "Todas as ações" anotado
+    (chute, mediana, janelas abaixo do chute), um quadro "Como ler" e um quadro
+    "Resultados" escrito a partir dos números; à direita, as 27 ações, da mais
+    fácil para a mais difícil (mediana do 1º modelo), cada uma com a mediana de
+    cada modelo. O eixo x vai até ``limite_x``: as probabilidades da ação certa
+    raramente passam disso, e a nota de rodapé conta as janelas que ficam de fora.
     Também grava a tabela ``resumo_cdf_por_acao.json`` (a versão em números).
     """
     from src.avaliacao import cdf_empirica
@@ -421,78 +440,177 @@ def figura_cdf_por_acao(fontes=FONTES_CDF, pasta: Path = PROBABILIDADES,
     acaso = 1.0 / len(acoes)
     referencia = modelos[0]["por_acao"]
     ordem = sorted(acoes, key=lambda a: -referencia[a]["mediana"])
+    todas = {m["nome"]: np.concatenate([m["por_acao"][a]["p_correta"] for a in acoes])
+             for m in modelos}
+    n_janelas = todas[modelos[0]["nome"]].size
+    n_por_acao = referencia[acoes[0]]["n"]
+    em_pct = matplotlib.ticker.FuncFormatter(lambda v, _: f"{100 * v:.0f}%")
 
+    fig = plt.figure(figsize=(19.5, 10.8))
+    externo = fig.add_gridspec(1, 2, width_ratios=(1.32, 3.6), wspace=0.1,
+                               left=0.035, right=0.995, top=0.86, bottom=0.075)
+    esquerda = externo[0].subgridspec(3, 1, height_ratios=(1.45, 0.95, 1.3), hspace=0.3)
     n_col = 7
-    n_lin = int(np.ceil((len(acoes) + 1) / n_col))
-    fig, axs = plt.subplots(n_lin, n_col, figsize=(2.05 * n_col, 1.95 * n_lin),
-                            sharex=True, sharey=True)
-    axs = axs.ravel()
+    n_lin = int(np.ceil(len(acoes) / n_col))
+    direita = externo[1].subgridspec(n_lin, n_col, wspace=0.12, hspace=0.42)
 
-    def desenhar(ax, curvas, titulo, negrito=False):
+    def desenhar(ax, titulo, valores_por_modelo, grande=False):
         ax.axvline(acaso, color=TINTA_2, lw=1, ls=(0, (4, 3)), zorder=1)
-        for valores, cor in curvas:
+        medianas = []
+        for m, valores in zip(modelos, valores_por_modelo):
             x, f = cdf_empirica(valores)
             ax.step(np.concatenate([[0.0], x, [1.0]]), np.concatenate([[0.0], f, [1.0]]),
-                    where="post", color=cor, lw=1.8, zorder=2)
-        ax.set_title(titulo, fontsize=8.2, loc="left", pad=3,
-                     fontweight="bold" if negrito else "normal")
+                    where="post", color=m["cor"], lw=2.4 if grande else 1.8, zorder=2)
+            med = float(np.median(valores))
+            medianas.append(med)
+            ax.plot(med, 0.5, "o", ms=7 if grande else 4.5, color=m["cor"],
+                    mec=FUNDO, mew=1.2, zorder=3)
+        ax.set_title(titulo, fontsize=10.5 if grande else 8.2, loc="left", pad=3,
+                     fontweight="bold" if grande else "normal")
         ax.grid(color=GRADE, lw=0.6, zorder=0)
         ax.set_xlim(0, limite_x)
         ax.set_ylim(0, 1.02)
-        ax.tick_params(labelsize=7, length=2)
-
-    for ax, acao in zip(axs, ordem):
-        desenhar(ax, [(m["por_acao"][acao]["p_correta"], m["cor"]) for m in modelos],
-                 f"{acao} {_nome_curto(acao)}")
-
-    # Último painel: todas as ações juntas + legenda.
-    ax_total = axs[len(acoes)]
-    desenhar(ax_total,
-             [(np.concatenate([m["por_acao"][a]["p_correta"] for a in acoes]), m["cor"])
-              for m in modelos],
-             "Todas as ações", negrito=True)
-    for ax in axs[len(acoes) + 1:]:
-        ax.set_visible(False)
-
-    for ax in axs[(n_lin - 1) * n_col:]:
-        ax.set_xlabel("prob. da ação certa", fontsize=7.5)
-    for ax in axs[::n_col]:
-        ax.set_ylabel("fração ≤ x", fontsize=7.5)
-    em_pct = matplotlib.ticker.FuncFormatter(lambda v, _: f"{100 * v:.0f}%")
-    for ax in axs:
-        ax.xaxis.set_major_locator(matplotlib.ticker.FixedLocator(
-            np.linspace(0, limite_x, 3)))
+        ax.xaxis.set_major_locator(matplotlib.ticker.FixedLocator(np.linspace(0, limite_x, 3)))
         ax.yaxis.set_major_locator(matplotlib.ticker.FixedLocator([0, 0.5, 1]))
         ax.xaxis.set_major_formatter(em_pct)
         ax.yaxis.set_major_formatter(em_pct)
+        return medianas
+
+    # ---- painel grande: todas as ações, anotado ---------------------------------
+    ax_t = fig.add_subplot(esquerda[0])
+    meds = desenhar(ax_t, f"Todas as ações juntas ({n_janelas} janelas por modelo)",
+                    [todas[m["nome"]] for m in modelos], grande=True)
+    ax_t.tick_params(labelsize=8.5)
+    ax_t.set_xlabel("probabilidade que o modelo deu à ação certa (x)", fontsize=9)
+    ax_t.set_ylabel("fração das janelas com prob. ≤ x", fontsize=9)
+    ax_t.axhline(0.5, color=TINTA_2, lw=0.7, ls=":", zorder=1)
+    caixa = dict(boxstyle="round,pad=0.3", fc=FUNDO, ec=GRADE, lw=0.8)
+    seta = dict(arrowstyle="-|>", color=TINTA, lw=0.9, shrinkA=2, shrinkB=4)
+    ax_t.annotate("chute: 1/27 = 3,7%", xy=(acaso, 0.95), xytext=(0.09, 0.95),
+                  fontsize=8.5, va="center", arrowprops=seta, bbox=caixa)
+    alturas = [float((todas[m["nome"]] <= acaso).mean()) for m in modelos]
+    for m, h in zip(modelos, alturas):
+        ax_t.plot(acaso, h, "s", ms=6.5, color=m["cor"], mec=FUNDO, mew=1.2, zorder=4)
+    ax_t.annotate("ação certa ABAIXO do chute\n(altura da curva no tracejado):\n"
+                  + "  ·  ".join(f"{_curto(m)} {_v(h)}" for m, h in zip(modelos, alturas))
+                  + " das janelas",
+                  xy=(acaso, max(alturas)), xytext=(0.15, 0.2),
+                  fontsize=8.5, arrowprops=seta, bbox=caixa)
+    ax_t.annotate("mediana (bolinha na linha de 50%):\n"
+                  + "  ·  ".join(f"{_curto(m)} {_v(v)}" for m, v in zip(modelos, meds))
+                  + f"\n≈ {np.mean(meds) / acaso:.0f}× o chute",
+                  xy=(max(meds), 0.5), xytext=(0.2, 0.52),
+                  fontsize=8.5, arrowprops=seta, bbox=caixa)
+
+    # ---- quadro "Como ler" -----------------------------------------------------
+    ax_l = fig.add_subplot(esquerda[1]); ax_l.axis("off")
+    ax_l.text(0.0, 1.0, "Como ler", fontsize=11, fontweight="bold", va="top",
+              transform=ax_l.transAxes)
+    ax_l.text(0.0, 0.83,
+              "• Teste com pessoas que o modelo nunca viu (S2). Cada gravação vira\n"
+              f"  janelas de 3 s; cada ação tem {n_por_acao} janelas no teste.\n"
+              "• Em cada janela o modelo dá uma probabilidade a cada uma das 27\n"
+              "  ações. O gráfico usa só a dada à ação CERTA (eixo x).\n"
+              "• A curva (CDF) diz que fração das janelas ficou com probabilidade ≤ x.\n"
+              "  Curva que sobe tarde (mais à direita) = modelo mais confiante.\n"
+              "• Tracejado = chute (3,7%). Quadrado = janelas em que a ação certa\n"
+              "  recebeu menos que o chute. Bolinha na linha de 50% = mediana.",
+              fontsize=8.6, va="top", linespacing=1.45, transform=ax_l.transAxes)
+
+    # ---- quadro "Resultados" (escrito a partir dos números) --------------------
+    ax_r = fig.add_subplot(esquerda[2]); ax_r.axis("off")
+    ax_r.text(0.0, 1.0, "Resultados", fontsize=11, fontweight="bold", va="top",
+              transform=ax_r.transAxes)
+
+    def juntar(valor):
+        return "  ·  ".join(f"{_curto(m)} {valor(m)}" for m in modelos)
+
+    linhas = [
+        f"• Acerto por janela: {juntar(lambda m: _v(m['acuracia_janela']))} (chute 3,7%).",
+        "• Mediana da prob. da ação certa: "
+        f"{juntar(lambda m: _v(float(np.median(todas[m['nome']]))))}.",
+        "• Ação certa abaixo do chute: "
+        f"{juntar(lambda m: _v(float((todas[m['nome']] <= acaso).mean())))} das janelas.",
+    ]
+    if len(modelos) > 1:
+        maior = sum(modelos[0]["por_acao"][a]["mediana"] >= modelos[1]["por_acao"][a]["mediana"]
+                    for a in acoes)
+        linhas.append(f"• {_curto(modelos[0])} tem mediana maior em {maior} de {len(acoes)} ações.")
+    for m in modelos:   # ação que "puxa" os palpites de um modelo (> 3× o esperado)
+        ima = max(acoes, key=lambda a: m["por_acao"][a]["palpites"])
+        frac = m["por_acao"][ima]["palpites"]
+        if frac > 3 * acaso:
+            outros = ", ".join(f"{_curto(o)} {_v(o['por_acao'][ima]['palpites'])}"
+                               for o in modelos if o is not m)
+            linhas.append(f"• {_curto(m)} chuta {ima} ({ACOES.get(ima, '')}) em {_v(frac)} das\n"
+                          f"  janelas (esperado 3,7%{'; ' + outros if outros else ''}): a curva de\n"
+                          f"  {ima} vai longe, mas as outras ações perdem probabilidade.")
+    linhas.append(f"• Mais fáceis ({_curto(modelos[0])}): " + ", ".join(ordem[:5]) + ".")
+    linhas.append(f"• Mais difíceis ({_curto(modelos[0])}): " + ", ".join(ordem[::-1][:5])
+                  + " (perto do chute).")
+    ax_r.text(0.0, 0.86, "\n".join(linhas), fontsize=8.6, va="top", linespacing=1.45,
+              transform=ax_r.transAxes)
+
+    # ---- 27 painéis, um por ação ------------------------------------------------
+    axs = [fig.add_subplot(direita[i // n_col, i % n_col]) for i in range(n_lin * n_col)]
+    for i, (ax, acao) in enumerate(zip(axs, ordem)):
+        meds_acao = desenhar(ax, f"{i + 1}. {acao} {_nome_curto(acao, 21)}",
+                             [m["por_acao"][acao]["p_correta"] for m in modelos])
+        ax.tick_params(labelsize=6.8, length=2)
+        texto = ["mediana"] + [f"{_curto(m)} {100 * v:.0f}%" for m, v in zip(modelos, meds_acao)]
+        for m in modelos:
+            if m["por_acao"][acao]["palpites"] > 3 * acaso:
+                texto += [f"{_curto(m)} chuta {acao}",
+                          f"em {100 * m['por_acao'][acao]['palpites']:.0f}% das janelas"]
+        ax.text(0.97, 0.05, "\n".join(texto), transform=ax.transAxes, ha="right",
+                va="bottom", fontsize=6.6, color=TINTA, linespacing=1.25,
+                bbox=dict(boxstyle="round,pad=0.25", fc=FUNDO, ec="none", alpha=0.9))
+        if i % n_col:
+            ax.tick_params(labelleft=False)
+        if i + n_col < len(acoes):
+            ax.tick_params(labelbottom=False)
+        else:
+            ax.set_xlabel("prob. da ação certa", fontsize=7.2)
+        if i % n_col == 0:
+            ax.set_ylabel("fração ≤ x", fontsize=7.2)
+    for ax in axs[len(acoes):]:
+        ax.set_visible(False)
+    if len(acoes) < len(axs):   # espaço livre no fim da grade: explica a ordem
+        livre = axs[len(acoes)].get_position()
+        fig.text(livre.x0 + livre.width / 2, livre.y0 + livre.height / 2,
+                 "Ordem dos painéis:\nda ação mais fácil (1)\npara a mais difícil "
+                 f"({len(acoes)}),\npela mediana do {_curto(modelos[0])}",
+                 ha="center", va="center", fontsize=8.5, color=TINTA_2, linespacing=1.4)
 
     fora = []
     for m in modelos:
-        todas = np.concatenate([m["por_acao"][a]["p_correta"] for a in acoes])
-        n_fora = int((todas > limite_x).sum())
+        n_fora = int((todas[m["nome"]] > limite_x).sum())
         if n_fora:
-            fora.append(f"{n_fora} de {todas.size} janelas da {m['nome']}")
-    nota_fora = (f"Eixo cortado em {100 * limite_x:.0f}%; passam disso: "
+            fora.append(f"{n_fora} de {todas[m['nome']].size} janelas da {m['nome']}")
+    nota_fora = (f"Eixo x cortado em {100 * limite_x:.0f}%; passam disso: "
                  + "; ".join(fora) + "." if fora
-                 else f"Eixo cortado em {100 * limite_x:.0f}%; nenhuma janela passa disso.")
+                 else f"Eixo x cortado em {100 * limite_x:.0f}%; nenhuma janela passa disso.")
 
-    alcas = [matplotlib.lines.Line2D([], [], color=m["cor"], lw=2,
-                                     label=f"{m['nome']} (acerto {_pct(m['acuracia_janela'])})")
+    alcas = [matplotlib.lines.Line2D(
+                 [], [], color=m["cor"], lw=2.4,
+                 label=f"{m['nome']} ({_curto(m)}): acerto {_pct(m['acuracia_janela'])}")
              for m in modelos]
     alcas.append(matplotlib.lines.Line2D([], [], color=TINTA_2, lw=1, ls=(0, (4, 3)),
                                          label="chute (1/27 = 3,7%)"))
-    fig.tight_layout(rect=(0, 0, 1, 0.955))
-    fig.legend(handles=alcas, loc="lower left", bbox_to_anchor=(0.0, 0.958), ncol=len(alcas),
-               frameon=False, fontsize=9)
-    fig.suptitle("CDF por ação: quanta probabilidade o modelo dá à ação certa (pessoas novas, S2)",
-                 x=0.0, ha="left", fontweight="bold", fontsize=12.5, y=1.025)
-    fig.text(0.0, -0.012,
-             "Cada curva: as 72 janelas de 3 s da ação no teste (8 pessoas × 9). Curva mais à direita e mais "
-             "baixa = mais confiança na ação certa; onde a curva cruza o\nchute, lê-se a fração de janelas em que o "
-             "modelo deu à ação certa menos que um palpite aleatório. Painéis da ação mais fácil para a mais "
-             f"difícil ({modelos[0]['nome']}).\n{nota_fora} Seed 0 de cada modelo. Números: "
+    alcas.append(matplotlib.lines.Line2D([], [], color=TINTA_2, lw=0, marker="o", ms=6,
+                                         label="mediana"))
+    fig.suptitle("CDF por ação: quanta probabilidade o modelo dá à ação certa "
+                 "(pessoas novas, protocolo S2)",
+                 x=0.035, ha="left", fontweight="bold", fontsize=15, y=0.985)
+    fig.text(0.035, 0.935, "Quanto mais à direita a curva, mais confiança o modelo tem na "
+             "ação certa. Curva colada no tracejado = o modelo não sabe mais que um chute.",
+             fontsize=10, color=TINTA_2, ha="left")
+    fig.legend(handles=alcas, loc="lower left", bbox_to_anchor=(0.03, 0.875),
+               ncol=len(alcas), frameon=False, fontsize=9.5)
+    fig.text(0.035, 0.025,
+             f"{nota_fora} Seed 0 de cada modelo. Números por ação: "
              "artifacts/resultados/probabilidades/resumo_cdf_por_acao.json",
-             fontsize=7.5, color=TINTA_2, ha="left", va="top")
+             fontsize=8, color=TINTA_2, ha="left", va="top")
 
     tabela = {
         "o_que_e": "probabilidade dada à ação verdadeira, por janela de 3 s, teste S2; "
