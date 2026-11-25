@@ -54,11 +54,15 @@ medidos (`artifacts/resultados/`). Explicação de cada um nas seções abaixo.
 
 ![Acerto por ação](../artifacts/figuras/resultado_3_acerto_por_acao.png)
 
-**4. Limpeza da fase (tarefa d)**
+**4. CDF por ação: quanta confiança o modelo dá à ação certa**
+
+![CDF por ação](../artifacts/figuras/resultado_4_cdf_por_acao.png)
+
+**5. Limpeza da fase (tarefa d)**
 
 ![Fase sanitizada](../artifacts/figuras/sinal_1_fase_sanitizada.png)
 
-**5. O "ritmo" do movimento — Doppler (ML-03)**
+**6. O "ritmo" do movimento — Doppler (ML-03)**
 
 ![Doppler](../artifacts/figuras/sinal_2_doppler.png)
 
@@ -419,6 +423,43 @@ cita ~16 min sozinha, não medido aqui). O script da rede neural v2 usa
 contorna isso sem editar o arquivo original (põe o nome disponível antes de
 executá-lo) e registra o contorno no JSON.
 
+### CDF por ação (pedido do professor, 11/11)
+
+O acerto (certo/errado) esconde **quanto** o modelo errou. Para cada janela de
+3 s do teste, olhamos a probabilidade que o modelo deu à ação **certa** e
+desenhamos, por ação, a CDF dessa probabilidade: a fração de janelas em que ela
+ficou abaixo de cada valor. Curva mais à direita = mais confiança na resposta
+certa; a linha tracejada é o chute (1/27 = 3,7%).
+
+| | RF + Doppler | Rede temporal |
+|---|---|---|
+| Acerto por janela (seed 0) | 18,9% | 14,0% |
+| Mediana da probabilidade da ação certa | 7,7% | 7,3% |
+| Janelas em que a ação certa ficou **abaixo do chute** | 12,6% | 17,6% |
+| Janelas com A01 como palpite (o certo seria 3,7%) | 4,7% | 17,3% |
+
+O que a figura mostra:
+
+- **O RF quase nunca descarta a ação certa.** Em quase todas as ações a curva
+  azul começa à direita do chute: ele erra o palpite, mas a ação certa costuma
+  estar entre as mais prováveis.
+- **A rede temporal tem um "ímã" em A01 (alongar e relaxar).** Ela dá A01 como
+  palpite em 17% das janelas. Por isso a curva laranja de A01 vai longe, e em
+  várias outras ações (A15, A16, A26) ela zera a probabilidade da ação certa
+  numa parte das janelas.
+- **Afundos, chute para a esquerda, agachamento e salto** são as ações em que
+  os modelos mais se aproximam da resposta certa. **Torções (A04, A05),
+  arremesso para a direita (A21) e curvar-se (A27)** ficam perto do chute
+  (no RF, mediana entre 4,5% e 6%).
+
+Os números de cada ação estão em
+`artifacts/resultados/probabilidades/resumo_cdf_por_acao.json`. As
+probabilidades vêm de uma reexecução da seed 0 de cada modelo, que agora grava
+as probabilidades por janela (`probabilidades_*.npz`). O RF reproduziu
+exatamente o resultado versionado; a rede temporal reproduziu a época e a
+acurácia, com 18 células diferentes na matriz de confusão por janela (PyTorch
+2.14.0 aqui, 2.14.1 na execução original).
+
 ---
 
 ## 4. O que falta fazer
@@ -433,7 +474,8 @@ executá-lo) e registra o contorno no JSON.
    a rede temporal (convolucional + recorrente) e as duas versões da rede neural (v1 e v2)
    tiveram números menores que o RF + Doppler no S2 (diferença não testada de
    forma pareada).
-4. **Terminar a análise (e):** quais ações se confundem (ex.: chutar com a
+4. **Terminar a análise (e):** a CDF por ação já está feita (ML-04, acima);
+   falta ver quais ações se confundem (ex.: chutar com a
    perna esquerda × direita), se a fase limpa ajuda, quais antenas e
    frequências atrapalham.
 5. **Terminar a tarefa (d):** comparar técnicas de limpeza do sinal.

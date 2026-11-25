@@ -10,11 +10,14 @@ Saída em ``artifacts/figuras/``:
 - ``resultado_3_acerto_por_acao.png``     — acerto por ação do RF + Doppler (ML-03)
 - ``sinal_1_fase_sanitizada.png``          — fase crua → sem rampa (tarefa d)
 - ``sinal_2_doppler.png``                  — "ritmo" do sinal em quatro ações (ML-03; lê o cache de atributos)
+- ``resultado_4_cdf_por_acao.png``         — CDF da probabilidade da ação certa, por ação
+  (lê ``artifacts/resultados/probabilidades/*.npz``; grava também ``resumo_cdf_por_acao.json`` lá)
 
 Uso::
 
-    python scripts/gerar_figuras_resultados.py            # todas
+    python scripts/gerar_figuras_resultados.py              # todas
     python scripts/gerar_figuras_resultados.py --sem-sinal  # só as de resultados (sem dataset)
+    python scripts/gerar_figuras_resultados.py --apenas-cdf # só a CDF por ação
 """
 
 from __future__ import annotations
@@ -78,7 +81,7 @@ def _salvar(fig, nome: str) -> Path:
     destino = FIGURAS / nome
     fig.savefig(destino, dpi=160, bbox_inches="tight")
     plt.close(fig)
-    print(f"--> {destino.relative_to(RAIZ)}")
+    print(f"--> {destino.relative_to(RAIZ) if destino.is_relative_to(RAIZ) else destino}")
     return destino
 
 
@@ -338,15 +341,193 @@ def figura_doppler(acoes=("A12", "A26", "A13", "A17")) -> Path:
     return _salvar(fig, "sinal_2_doppler.png")
 
 
+# ---------------------------------------------------------------------------
+# 6. CDF por ação: quanta probabilidade o modelo dá à ação certa
+# ---------------------------------------------------------------------------
+
+PROBABILIDADES = RESULTADOS / "probabilidades"
+
+# (nome na figura, arquivo em artifacts/resultados/probabilidades/, cor)
+FONTES_CDF = (
+    ("Random Forest + Doppler", "probabilidades_baseline_s2_rf_j30_p30_seed0_abase-dop_amp-dop_cm.npz", AZUL),
+    ("Rede temporal (CNN + GRU)", "probabilidades_rede_temporal_s2_seed0.npz", LARANJA),
+)
+
+
+def resumo_cdf_por_acao(fontes=FONTES_CDF, pasta: Path = PROBABILIDADES) -> dict:
+    """Probabilidade da ação certa por janela, separada por ação, para cada modelo.
+
+    Devolve ``{"acoes": [...], "modelos": [{"nome", "cor", "arquivo", "acuracia_janela",
+    "por_acao": {acao: {"p_correta": array, "mediana", "acima_do_acaso", "acerto"}}}]}``.
+    Modelos sem arquivo ficam de fora; sem nenhum, ``FileNotFoundError``.
+    """
+    from src.avaliacao import carregar_probabilidades, probabilidade_da_correta
+
+    modelos, acoes = [], None
+    for nome, arquivo, cor in fontes:
+        caminho = Path(pasta) / arquivo
+        if not caminho.is_file():
+            print(f"    (sem {caminho.relative_to(RAIZ) if caminho.is_relative_to(RAIZ) else caminho}: "
+                  f"{nome} fica de fora)")
+            continue
+        dados = carregar_probabilidades(caminho)
+        acoes_arq = [str(a) for a in dados["acoes"]]
+        if acoes is None:
+            acoes = acoes_arq
+        elif acoes_arq != acoes:
+            raise ValueError(f"{arquivo}: ações diferentes das do primeiro modelo.")
+        proba, y = dados["probabilidades"], dados["y"]
+        p_certa = probabilidade_da_correta(proba, y)
+        acerto = proba.argmax(axis=1) == y
+        acaso = 1.0 / len(acoes)
+        por_acao = {}
+        for i, acao in enumerate(acoes):
+            m = y == i
+            por_acao[acao] = {
+                "p_correta": p_certa[m],
+                "n": int(m.sum()),
+                "mediana": float(np.median(p_certa[m])),
+                "acima_do_acaso": float((p_certa[m] > acaso).mean()),
+                "acerto": float(acerto[m].mean()),
+            }
+        modelos.append({"nome": nome, "cor": cor, "arquivo": arquivo,
+                        "acuracia_janela": float(acerto.mean()), "por_acao": por_acao})
+    if not modelos:
+        raise FileNotFoundError(f"Nenhum arquivo de probabilidades em {pasta}.")
+    return {"acoes": acoes, "modelos": modelos}
+
+
+def _nome_curto(acao: str, limite: int = 24) -> str:
+    nome = ACOES.get(acao, "")
+    return nome if len(nome) <= limite else nome[: limite - 1].rstrip() + "…"
+
+
+def figura_cdf_por_acao(fontes=FONTES_CDF, pasta: Path = PROBABILIDADES,
+                        limite_x: float = 0.5) -> Path:
+    """CDF da probabilidade dada à ação certa, um painel por ação (pedido do professor).
+
+    Cada curva diz, para uma ação, em que fração dos pedaços de 3 s o modelo deu
+    à ação certa probabilidade ≤ x. Curva mais **à direita e mais baixa** = o
+    modelo dá mais confiança à resposta certa. A linha tracejada é o chute (1/27).
+    Os painéis vão da ação mais fácil para a mais difícil (mediana do 1º modelo).
+    O eixo x vai até ``limite_x``: as probabilidades da ação certa raramente
+    passam disso, e a nota de rodapé conta as janelas que ficam de fora.
+    Também grava a tabela ``resumo_cdf_por_acao.json`` (a versão em números).
+    """
+    from src.avaliacao import cdf_empirica
+
+    resumo = resumo_cdf_por_acao(fontes, pasta)
+    acoes, modelos = resumo["acoes"], resumo["modelos"]
+    acaso = 1.0 / len(acoes)
+    referencia = modelos[0]["por_acao"]
+    ordem = sorted(acoes, key=lambda a: -referencia[a]["mediana"])
+
+    n_col = 7
+    n_lin = int(np.ceil((len(acoes) + 1) / n_col))
+    fig, axs = plt.subplots(n_lin, n_col, figsize=(2.05 * n_col, 1.95 * n_lin),
+                            sharex=True, sharey=True)
+    axs = axs.ravel()
+
+    def desenhar(ax, curvas, titulo, negrito=False):
+        ax.axvline(acaso, color=TINTA_2, lw=1, ls=(0, (4, 3)), zorder=1)
+        for valores, cor in curvas:
+            x, f = cdf_empirica(valores)
+            ax.step(np.concatenate([[0.0], x, [1.0]]), np.concatenate([[0.0], f, [1.0]]),
+                    where="post", color=cor, lw=1.8, zorder=2)
+        ax.set_title(titulo, fontsize=8.2, loc="left", pad=3,
+                     fontweight="bold" if negrito else "normal")
+        ax.grid(color=GRADE, lw=0.6, zorder=0)
+        ax.set_xlim(0, limite_x)
+        ax.set_ylim(0, 1.02)
+        ax.tick_params(labelsize=7, length=2)
+
+    for ax, acao in zip(axs, ordem):
+        desenhar(ax, [(m["por_acao"][acao]["p_correta"], m["cor"]) for m in modelos],
+                 f"{acao} {_nome_curto(acao)}")
+
+    # Último painel: todas as ações juntas + legenda.
+    ax_total = axs[len(acoes)]
+    desenhar(ax_total,
+             [(np.concatenate([m["por_acao"][a]["p_correta"] for a in acoes]), m["cor"])
+              for m in modelos],
+             "Todas as ações", negrito=True)
+    for ax in axs[len(acoes) + 1:]:
+        ax.set_visible(False)
+
+    for ax in axs[(n_lin - 1) * n_col:]:
+        ax.set_xlabel("prob. da ação certa", fontsize=7.5)
+    for ax in axs[::n_col]:
+        ax.set_ylabel("fração ≤ x", fontsize=7.5)
+    em_pct = matplotlib.ticker.FuncFormatter(lambda v, _: f"{100 * v:.0f}%")
+    for ax in axs:
+        ax.xaxis.set_major_locator(matplotlib.ticker.FixedLocator(
+            np.linspace(0, limite_x, 3)))
+        ax.yaxis.set_major_locator(matplotlib.ticker.FixedLocator([0, 0.5, 1]))
+        ax.xaxis.set_major_formatter(em_pct)
+        ax.yaxis.set_major_formatter(em_pct)
+
+    fora = []
+    for m in modelos:
+        todas = np.concatenate([m["por_acao"][a]["p_correta"] for a in acoes])
+        n_fora = int((todas > limite_x).sum())
+        if n_fora:
+            fora.append(f"{n_fora} de {todas.size} janelas da {m['nome']}")
+    nota_fora = (f"Eixo cortado em {100 * limite_x:.0f}%; passam disso: "
+                 + "; ".join(fora) + "." if fora
+                 else f"Eixo cortado em {100 * limite_x:.0f}%; nenhuma janela passa disso.")
+
+    alcas = [matplotlib.lines.Line2D([], [], color=m["cor"], lw=2,
+                                     label=f"{m['nome']} (acerto {_pct(m['acuracia_janela'])})")
+             for m in modelos]
+    alcas.append(matplotlib.lines.Line2D([], [], color=TINTA_2, lw=1, ls=(0, (4, 3)),
+                                         label="chute (1/27 = 3,7%)"))
+    fig.tight_layout(rect=(0, 0, 1, 0.955))
+    fig.legend(handles=alcas, loc="lower left", bbox_to_anchor=(0.0, 0.958), ncol=len(alcas),
+               frameon=False, fontsize=9)
+    fig.suptitle("CDF por ação: quanta probabilidade o modelo dá à ação certa (pessoas novas, S2)",
+                 x=0.0, ha="left", fontweight="bold", fontsize=12.5, y=1.025)
+    fig.text(0.0, -0.012,
+             "Cada curva: as 72 janelas de 3 s da ação no teste (8 pessoas × 9). Curva mais à direita e mais "
+             "baixa = mais confiança na ação certa; onde a curva cruza o\nchute, lê-se a fração de janelas em que o "
+             "modelo deu à ação certa menos que um palpite aleatório. Painéis da ação mais fácil para a mais "
+             f"difícil ({modelos[0]['nome']}).\n{nota_fora} Seed 0 de cada modelo. Números: "
+             "artifacts/resultados/probabilidades/resumo_cdf_por_acao.json",
+             fontsize=7.5, color=TINTA_2, ha="left", va="top")
+
+    tabela = {
+        "o_que_e": "probabilidade dada à ação verdadeira, por janela de 3 s, teste S2; "
+                   "mediana, fração acima do acaso (1/27) e acerto top-1, por ação",
+        "acaso": acaso,
+        "modelos": [{
+            "nome": m["nome"], "arquivo": m["arquivo"], "acuracia_janela": m["acuracia_janela"],
+            "por_acao": {a: {k: v for k, v in m["por_acao"][a].items() if k != "p_correta"}
+                         for a in ordem},
+        } for m in modelos],
+    }
+    Path(pasta).mkdir(parents=True, exist_ok=True)
+    (Path(pasta) / "resumo_cdf_por_acao.json").write_text(
+        json.dumps(tabela, ensure_ascii=False, indent=1), encoding="utf-8")
+    return _salvar(fig, "resultado_4_cdf_por_acao.png")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--sem-sinal", action="store_true",
                         help="Não gera as figuras que leem o dataset (fase e Doppler).")
+    parser.add_argument("--apenas-cdf", action="store_true",
+                        help="Gera só a CDF por ação (lê artifacts/resultados/probabilidades/).")
     args = parser.parse_args()
     FIGURAS.mkdir(parents=True, exist_ok=True)
+    if args.apenas_cdf:
+        figura_cdf_por_acao()
+        return 0
     figura_comparacao()
     figura_assinatura()
     figura_por_acao()
+    try:
+        figura_cdf_por_acao()
+    except FileNotFoundError as erro:
+        print(f"    (CDF por ação pulada: {erro})")
     if not args.sem_sinal:
         figura_fase()
         figura_doppler()

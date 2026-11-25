@@ -279,6 +279,12 @@ def test_rodar_seed_grava_escolha_antes_e_avalia_o_teste_uma_vez(tmp_path, monke
     assert completo["teste"]["por_sequencia"]["n"] == 3
     assert (tmp_path / "fig" / "confusao_rede_temporal_s2_seed0_j5_e2.png").is_file()
     assert final["unidade"].startswith("janela de 0.5 s (5 quadros)")
+    # As probabilidades do teste ficam gravadas e reproduzem a acurácia do JSON.
+    from src.avaliacao import carregar_probabilidades
+    proba = carregar_probabilidades(tmp_path / "probabilidades_rede_temporal_s2_seed0_j5_e2.npz")
+    assert [tuple(s) for s in proba["sequencias"]] == [tuple(s) for s in SEQS_TE]
+    acerto = (proba["probabilidades"].argmax(axis=1) == proba["y"]).mean()
+    assert acerto == pytest.approx(completo["teste"]["por_janela"]["acuracia"])
 
 
 def test_nome_base_so_ganha_sufixo_fora_do_padrao():

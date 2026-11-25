@@ -35,8 +35,13 @@ Saídas, com <sufixo> = <protocolo>_<modelo>[_<acoes>]_j<janela>_p<passo>_seed<s
 (``_n<modo>`` só quando a normalização não é ``nenhuma``; ``_a<conjuntos>``,
 com os conjuntos unidos por ``-``, só quando não é só ``base``):
     artifacts/resultados/baseline_<sufixo>.json
+    artifacts/resultados/probabilidades_baseline_<sufixo>.npz   saída por janela
+                                                  (ver src/avaliacao.salvar_probabilidades)
     artifacts/figuras/confusao_<sufixo>.png       matriz por janela
     artifacts/figuras/confusao_<sufixo>_seq.png   matriz por sequência
+
+``--resultados`` e ``--figuras`` mudam as pastas (para uma reexecução não
+sobrescrever os resultados versionados).
 """
 
 import argparse
@@ -63,7 +68,12 @@ from src.atributos import (  # noqa: E402
     janelas_de_sequencia,
     montar_conjunto,
 )
-from src.avaliacao import avaliar, ic_bootstrap, salvar_matriz_confusao  # noqa: E402
+from src.avaliacao import (  # noqa: E402
+    avaliar,
+    ic_bootstrap,
+    salvar_matriz_confusao,
+    salvar_probabilidades,
+)
 from src.cache_csi import abrir_cache, construir_cache  # noqa: E402
 from src.doppler import abrir_cache_atributos, construir_cache_atributos  # noqa: E402
 from src.mmfi import (  # noqa: E402
@@ -220,6 +230,10 @@ def main() -> int:
     parser.add_argument("--cache-atributos",
                         default=str(RAIZ_PROJETO / "artifacts" / "cache_atributos"),
                         help="cache dos atributos de Doppler/antenas")
+    parser.add_argument("--resultados", default=str(RAIZ_PROJETO / "artifacts" / "resultados"),
+                        help="pasta do JSON e das probabilidades")
+    parser.add_argument("--figuras", default=str(RAIZ_PROJETO / "artifacts" / "figuras"),
+                        help="pasta das matrizes de confusão")
     args = parser.parse_args()
 
     try:
@@ -340,13 +354,17 @@ def main() -> int:
                        else {"diagnostico": round(tempo_diagnostico, 1)})},
         "data": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    pasta_resultados = RAIZ_PROJETO / "artifacts" / "resultados"
+    pasta_resultados = Path(args.resultados)
     pasta_resultados.mkdir(parents=True, exist_ok=True)
     arquivo_json = pasta_resultados / f"baseline_{sufixo}.json"
     arquivo_json.write_text(json.dumps(resultado, ensure_ascii=False, indent=1), encoding="utf-8")
+    arquivo_proba = salvar_probabilidades(
+        pasta_resultados / f"probabilidades_baseline_{sufixo}.npz",
+        proba, y_te, g_te, acoes, teste)
 
     print(f"\n--> Métricas: {arquivo_json}")
-    pasta_figuras = RAIZ_PROJETO / "artifacts" / "figuras"
+    print(f"--> Probabilidades por janela: {arquivo_proba}")
+    pasta_figuras = Path(args.figuras)
     rotulo_norm = ("" if args.normalizacao == "nenhuma"
                    else f" — normalização {args.normalizacao}")
     if args.atributos != ATRIBUTOS_PADRAO:

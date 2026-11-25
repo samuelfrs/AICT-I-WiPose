@@ -22,6 +22,7 @@ outro treino, foram medidos 43–45 min por seed.
 
 Saídas, por seed (``<sufixo>`` = ``_j<janela>_e<epocas>`` só fora do padrão 30/15):
     artifacts/resultados/rede_temporal_s2_seed<seed><sufixo>.json
+    artifacts/resultados/probabilidades_rede_temporal_s2_seed<seed><sufixo>.npz   (teste, por janela)
     artifacts/figuras/confusao_rede_temporal_s2_seed<seed><sufixo>.png   (por sequência)
 
 Reusa o cache do CSI do ML-01 (artifacts/cache/), construindo-o se faltar.
@@ -44,7 +45,7 @@ RAIZ_PROJETO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ_PROJETO))
 
 from src.atributos import janelas_de_sequencia  # noqa: E402
-from src.avaliacao import avaliar, salvar_matriz_confusao  # noqa: E402
+from src.avaliacao import avaliar, salvar_matriz_confusao, salvar_probabilidades  # noqa: E402
 from src.mmfi import N_QUADROS, PROTOCOLO_3  # noqa: E402
 from src.protocolos import SUJEITOS_VALIDACAO_S2  # noqa: E402
 from src.rede_temporal import (  # noqa: E402
@@ -148,6 +149,9 @@ def rodar_seed(dados: Dict[str, DadosRede], media: np.ndarray, desvio: np.ndarra
 
     proba, y, grupos = prever(modelo, dados["teste"], media, desvio, janela)
     metricas = avaliar(proba, y, grupos, len(acoes), seed=seed)
+    arquivo_proba = salvar_probabilidades(
+        Path(pasta_resultados) / f"probabilidades_{base}.npz",
+        proba, y, grupos, acoes, dados["teste"].sequencias)
     j, q = metricas["por_janela"], metricas["por_sequencia"]
     log(f"--> Teste S2: janela {100 * j['acuracia']:5.1f}% "
         f"IC95% [{100 * j['ic95'][0]:4.1f}, {100 * j['ic95'][1]:4.1f}]   "
@@ -166,7 +170,7 @@ def rodar_seed(dados: Dict[str, DadosRede], media: np.ndarray, desvio: np.ndarra
              "estado": ESTADO_COMPLETO, "tempo_s": round(time.time() - t0, 1),
              "data": time.strftime("%Y-%m-%d %H:%M:%S")}
     gravar(saida, final)
-    log(f"--> Resultado: {saida}\n--> Figura: {figura}")
+    log(f"--> Resultado: {saida}\n--> Probabilidades: {arquivo_proba}\n--> Figura: {figura}")
     return final
 
 
