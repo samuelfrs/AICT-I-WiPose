@@ -40,6 +40,10 @@ artifacts/figuras/*
 !artifacts/resultados/
 artifacts/resultados/*
 !artifacts/resultados/*.json
+# Probabilidades por janela do teste (~200 KB cada): permitem refazer a CDF por
+# ação sem treinar de novo.
+!artifacts/resultados/probabilidades/
+artifacts/resultados/probabilidades/figuras/
 artifacts/.mplcache/
 
 # Dataset MM-Fi — cada integrante baixa a propria copia. Nem o original nem a
@@ -48,3 +52,4 @@ MMFi_Dataset/
 MMFi_leve/
 *.npy
 *.npz
+!artifacts/resultados/probabilidades/*.npz

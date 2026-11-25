@@ -33,6 +33,7 @@
  "janela": 30,
  "passo": 30,
  "seed": 0,
+ "normalizacao": "nenhuma",
  "hiperparametros": {
   "n_estimators": 300,
   "n_jobs": -1,
@@ -2508,9 +2509,20 @@
   },
   "acaso": 0.037037037037037035
  },
- "tempo_s": {
-  "treino": 26.1,
-  "total": 62.4
+ "identificacao_sujeito": {
+  "acuracia": 0.776954732510288,
+  "ic95": [
+   0.7353909465020576,
+   0.8164711934156378
+  ],
+  "acaso": 0.025,
+  "n_janelas_teste": 2430,
+  "split": "s1"
  },
- "data": "2026-10-20 10:37:04"
+ "tempo_s": {
+  "treino": 14.3,
+  "total": 47.3,
+  "diagnostico": 11.9
+ },
+ "data": "2026-11-10 18:27:56"
 }

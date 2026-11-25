@@ -20,9 +20,9 @@ Processar sinais de rádio (CSI de WiFi a 5 GHz no padrão IEEE 802.11n) e infer
 |---|---|---|---|
 | **a** | Revisão bibliográfica — Wi-Pose (atividades predefinidas) × Winect (free-form) | ✅ Concluída | [`docs/analise-mmfi.md`](docs/analise-mmfi.md) e [`docs/guia-do-projeto.md`](docs/guia-do-projeto.md) |
 | **b** | Manipulação das estruturas de dados — carregar o CSI e plotar gráficos | ✅ Concluída | [`src/mmfi.py`](src/mmfi.py), [`scripts/inspecionar_mmfi.py`](scripts/inspecionar_mmfi.py) e versão leve em `dataset/MMFi_leve` |
-| **c** | Classificação de movimentos — modelos de ML e Deep Learning | ✅ Concluída | Baseline RF/SVM ([`scripts/treinar_baseline.py`](scripts/treinar_baseline.py)) e Rede Neural Multi-Head ([`src/rede_neural.py`](src/rede_neural.py), [`scripts/treinar_rede.py`](scripts/treinar_rede.py)) |
+| **c** | Classificação de movimentos — modelos de ML e Deep Learning | ✅ Concluída | Baseline RF/SVM ([`scripts/treinar_baseline.py`](scripts/treinar_baseline.py)), rede temporal ([`scripts/treinar_rede_temporal.py`](scripts/treinar_rede_temporal.py)) e Rede Neural Multi-Head ([`src/rede_neural.py`](src/rede_neural.py), [`scripts/treinar_rede.py`](scripts/treinar_rede.py)) |
 | **d** | Pré-processamento e calibração — filtragem espacial/temporal e offsets de fase | ✅ Concluída | Sanitização de fase por regressão linear em [`src/mmfi.py`](src/mmfi.py) e normalização min-max |
-| **e** | Análise crítica — matrizes de confusão e impacto de subportadoras ruidosas | ✅ Concluída | Matrizes de confusão e experimento de ablação espectral OFDM em [`artifacts/figuras/`](artifacts/figuras/) |
+| **e** | Análise crítica — matrizes de confusão e impacto de subportadoras ruidosas | 🟡 Em andamento | Matrizes de confusão, acerto por ação e CDF por ação em [`artifacts/figuras/`](artifacts/figuras/); a ablação de subportadoras da v1 não vale como análise (ver abaixo) |
 
 ---
 
@@ -32,7 +32,9 @@ O projeto implementou duas abordagens complementares de aprendizado de máquina 
 
 ### 1. Baselines Clássicos de Machine Learning (RF e SVM)
 * **Arquivos:** [`scripts/treinar_baseline.py`](scripts/treinar_baseline.py), [`src/atributos.py`](src/atributos.py), [`src/avaliacao.py`](src/avaliacao.py).
-* **Método:** Extrai atributos estatísticos de amplitude por subportadora (média, desvio padrão, percentis, energia espectral) sobre janelas temporais e treina classificadores **Random Forest** e **SVM**.
+* **Método:** Corta cada sequência em janelas de 3 s (30 quadros) e extrai **média e desvio padrão** por antena × subportadora, da amplitude e da fase sanitizada (1.368 atributos); treina **Random Forest** ou **SVM**. A divisão treino/teste é sempre por sequência inteira (S2 oficial ou S1 agrupado), sem vazamento.
+* **Normalização por sequência (ML-02, experimento):** `--normalizacao nenhuma|media|zscore` e `--diagnostico-sujeito` (mede quanto os atributos identificam a pessoa). Resultado e leitura em [`docs/resumo-do-projeto.md`](docs/resumo-do-projeto.md).
+* **Atributos de Doppler e entre antenas (ML-03):** `--atributos base,antenas,dop_amp,dop_cm` (lista separada por vírgula, concatenada nessa ordem; padrão `base`, que reproduz o ML-01/02). Os conjuntos novos ([`src/doppler.py`](src/doppler.py)) ficam num cache próprio em `artifacts/cache_atributos/` (~6 min medidos na primeira vez). [`scripts/selecionar_atributos.py`](scripts/selecionar_atributos.py) (só Random Forest, só S2/P3) escolhe a combinação por **validação** (sujeitos S04, S14, S24, S34 retirados do treino, 3 seeds) e só depois avalia o teste S2 com 5 seeds, com comparação pareada contra o `base`; resultado em `artifacts/resultados/selecao_atributos.json` e no resumo do projeto.
 * **Resultados e Métricas:** Salvos em `artifacts/resultados/baseline_*.json` com intervalos de confiança por bootstrap e matrizes de confusão em `artifacts/figuras/confusao_*.png`.
 
 ### 2. Rede Neural Convolucional Multi-Head (Deep Learning)
@@ -44,42 +46,45 @@ O projeto implementou duas abordagens complementares de aprendizado de máquina 
   * **Cabeça 2 (Pose 3D — Rota B):** Regride coordenadas métricas $(x, y, z)$ das 17 articulações em metros via *MSE Loss*, com prior anatômico inicializado no centro da cena ($Z \approx 3{,}0\text{ m}$).
   * **Função de Perda Conjunta:** $\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls}} + 10{,}0 \cdot \mathcal{L}_{\text{pose}}$.
 
----
-
-## 📊 Desempenho no Protocolo Oficial Cross-Subject (Split S2 / Protocolo P3)
-
-Avaliação sob o protocolo **Cross-Subject (Split S2)**, treinando em 32 voluntários (12.960 amostras) e testando exclusivamente em 8 voluntários nunca vistos pelo modelo (`S05, S10, S15, S20, S25, S30, S35, S40`, totalizando 3.240 amostras) sobre todas as 27 ações corporais:
-
-| Métrica Avaliada | Nossa Rede Neural (Multi-Head) | Baseline Publicado no MM-Fi (NeurIPS 2023) | Observação Técnica |
-|---|---|---|---|
-| **Acurácia Top-1 (27 Ações)** | **5,74%** (Pico de **6,11%**) | 5,45% (AGCN) / 5,12% (CTRGCN) | **Superou o baseline oficial de WiFi do dataset** (Acaso = 3,70%) |
-| **MPJPE de Pose 3D (mm)** | **243,42 mm** (Melhor: **241,93 mm**) | 231,10 mm (MetaFi++) | Ficou a apenas ~10 mm do modelo de ponta treinado em 4x RTX 3090 |
-| **Perda de Treinamento** | 3,6871 $\rightarrow$ **3,0985** | -- | Convergência monotônica estável em 15 épocas |
-| **Tempo de Treinamento** | **15,7 minutos** (CPU) | Várias horas / dias (MetaFi++) | Otimizado via dataset vetorizado em RAM (~180 MB) |
+### 3. Rede temporal própria e comparação dos modelos (ML-04)
+* **Arquivos:** [`src/rede_temporal.py`](src/rede_temporal.py), [`scripts/treinar_rede_temporal.py`](scripts/treinar_rede_temporal.py), [`scripts/rodar_rede_neural.py`](scripts/rodar_rede_neural.py), [`scripts/comparar_modelos.py`](scripts/comparar_modelos.py).
+* **Rede temporal:** janelas de 3 s (30 quadros); cada quadro vira `(60 canais = amplitude e fase × 3 antenas × 10 amostras, 114 subportadoras)`, com a média da própria sequência subtraída e padronização pelo treino. Codificador `Conv1d` por quadro + GRU bidirecional sobre os 30 quadros (~286 mil parâmetros, ~45 s/época em CPU). A época é escolhida na **validação** (S04, S14, S24, S34 retirados do treino) e o teste S2 é avaliado uma vez.
+* **Redes neurais v1 e v2:** `rodar_rede_neural.py` roda as duas versões (`main` 98a1f49 e `rede-neural-sml` 68d96a9) **sem alterar o código**, em `git worktree` temporários fora do repositório, 3 execuções cada, e copia os JSON para `artifacts/resultados/rede_neural_v<1|2>_exec<i>.json`.
+* **Comparação:** `comparar_modelos.py` junta RF base, RF + Doppler, rede temporal e as duas versões da rede neural (v1 e v2) numa tabela (média ± desvio entre execuções, unidade de cada modelo, como o número é escolhido) em `artifacts/resultados/comparacao_modelos.json`; tabela e leitura no [resumo do projeto](docs/resumo-do-projeto.md).
+* **Cuidados na leitura:** o "±" é só a variação entre seeds; os ICs por execução (só nos JSON do RF e da rede temporal) ignoram que as gravações se agrupam por pessoa (8 no teste) e são otimistas; só RF + Doppler × RF base foi comparado de forma pareada (ML-03). A rede temporal treina com 28 pessoas (4 ficam para a validação, sem retreino); os outros modelos, com 32. Ela também subtrai a média da gravação inteira antes de cortar as janelas, então o número "por janela" dela usa contexto do resto da gravação.
+* **Rede v1 reexecutada no ML-04:** 6,1% por quadro na última época (melhor época 6,4%), 1 execução. Os 5,74% (pico 6,11%) citados no relatório da v1 são de uma execução anterior; o script não tem seed, então as duas não são reproduzíveis entre si.
+* **CDF por ação:** `treinar_baseline.py` e `treinar_rede_temporal.py` gravam, ao lado do JSON, a probabilidade de cada ação em cada janela do teste (`probabilidades_*.npz`, ver `src/avaliacao.salvar_probabilidades`). `gerar_figuras_resultados.py --apenas-cdf` lê as de `artifacts/resultados/probabilidades/` e desenha a CDF da probabilidade dada à ação certa, um painel por ação.
 
 ---
 
-## 🔬 Análise Crítica: Impacto de Subportadoras OFDM (Tarefa e)
+## 📈 Resultados em gráficos (teste com pessoas novas, S2)
 
-Experimento de ablação controlada do espectro OFDM no padrão IEEE 802.11n (40 MHz) para avaliar o efeito do ruído e da largura de banda:
+| Comparação dos modelos | Acerto por ação do melhor modelo |
+|:---:|:---:|
+| ![Comparação](artifacts/figuras/resultado_1_comparacao_modelos.png) | ![Acerto por ação](artifacts/figuras/resultado_3_acerto_por_acao.png) |
+| *RF + Doppler 19,0% por pedaço de 3 s / 23,8% por gravação (chute: 3,7%)* | *Ações de corpo inteiro (afundo, agachamento, salto) são as mais fáceis* |
 
-| Cenário Espectral | Subportadoras Ativas | Acurácia Top-1 | MPJPE de Pose 3D (mm) | Conclusão Física de RF |
-|---|---|---|---|---|
-| **Espectro Completo (Baseline)** | **114 (100%)** | **5,74%** | **243,42 mm** | Referência com banda larga de 40 MHz íntegra |
-| **Bordas Removidas** | 96 (84%) | 4,85% | 251,81 mm | Degradação moderada (+8,39 mm); confirma atenuação de filtros nas bordas |
-| **Apenas 50% Centrais** | 58 (51%) | 3,98% | 269,65 mm | Acurácia cai para próximo ao chute aleatório (3,70%) |
-| **Amostragem Intercalada (Pares)** | 57 (50%) | 4,23% | **316,23 mm** | **Degradação crítica (+72,81 mm no erro)** por perda de continuidade espectral |
+**CDF por ação** — quanta probabilidade cada modelo dá à ação certa, um painel por ação (leitura no [resumo do projeto](docs/resumo-do-projeto.md)):
 
----
+![CDF por ação](artifacts/figuras/resultado_4_cdf_por_acao.png)
 
-## 🖼️ Galeria de Resultados Científicos
-
-As figuras em alta resolução encontram-se salvas e versionadas em [`artifacts/figuras/`](artifacts/figuras/):
-
-| Matriz de Confusão (Tarefa e) | Ablação de Subportadoras OFDM (Tarefa e) | Reconstrução de Pose 3D (Rota B) |
+| O sinal identifica a pessoa | Limpeza da fase (tarefa d) | Doppler: o "ritmo" do movimento |
 |:---:|:---:|:---:|
-| ![Matriz de Confusão](artifacts/figuras/matriz_confusao.png) | ![Ablação OFDM](artifacts/figuras/ablacao_subportadoras.png) | ![Pose 3D](artifacts/figuras/pose3d_predicao.png) |
-| *Discriminação das 27 ações no Split S2* | *Impacto da largura de banda e esparsidade* | *Esqueleto real (verde) vs previsto (roxo)* |
+| ![Assinatura](artifacts/figuras/resultado_2_assinatura_pessoa.png) | ![Fase](artifacts/figuras/sinal_1_fase_sanitizada.png) | ![Doppler](artifacts/figuras/sinal_2_doppler.png) |
+
+Explicação completa no [resumo do projeto](docs/resumo-do-projeto.md). Para regerar: `python scripts/gerar_figuras_resultados.py`.
+
+---
+
+## 🗄️ Rede neural v1 (multi-head): resultados anteriores
+
+As tabelas da v1 (5,74% de acurácia, MPJPE 243 mm, ablação de subportadoras) saíram do README porque não se comparam com os modelos acima:
+
+* **Acurácia:** a v1 olha um quadro de 100 ms e fica em ~6%, abaixo do Random Forest (15–19%). Os 5,45% (AGCN) do artigo do MM-Fi reconhecem a ação a partir do *esqueleto estimado*, outro pipeline; não são um baseline da classificação direta.
+* **Escolha da época:** o teste era medido a cada época e a "melhor época" (6,11% / 241,9 mm) foi escolhida olhando o teste. Não havia validação.
+* **Ablação:** as subportadoras eram zeradas só no teste, numa rede treinada com as 114. A queda mede a rede recebendo uma entrada que nunca viu, não a informação de cada faixa do espectro.
+
+O código, o relatório ([`docs/relatorio_rede_neural.md`](docs/relatorio_rede_neural.md)) e as figuras (`artifacts/figuras/matriz_confusao.png`, `ablacao_subportadoras.png`, `pose3d_predicao.png`) continuam no repositório. A v1 entra na comparação acima com 6,1%.
 
 ---
 
@@ -108,10 +113,31 @@ python scripts/treinar_rede.py --split S2 --protocolo P3 --epocas 15 --batch-siz
 ### 4. Executar os Baselines Clássicos (Random Forest e SVM)
 
 ```powershell
-python scripts/treinar_baseline.py
+python scripts/treinar_baseline.py --protocolo s2 --modelo rf
+python scripts/treinar_baseline.py --protocolo s2 --modelo rf --normalizacao zscore --diagnostico-sujeito
+python scripts/treinar_baseline.py --protocolo s2 --modelo rf --atributos base,dop_amp,dop_cm
+python scripts/selecionar_atributos.py
 ```
 
-### 5. Inspecionar Amostras Individuais do MM-Fi (Tarefa b)
+### 5. Rede Temporal Própria e Comparação dos Modelos (ML-04)
+
+```powershell
+python scripts/treinar_rede_temporal.py --seed 0 1 2
+python scripts/rodar_rede_neural.py
+python scripts/comparar_modelos.py
+```
+
+CDF por ação (seed 0 de cada modelo, gravada numa pasta separada para não sobrescrever os resultados versionados):
+
+```powershell
+python scripts/treinar_baseline.py --protocolo s2 --modelo rf --atributos base,dop_amp,dop_cm --resultados artifacts/resultados/probabilidades --figuras artifacts/resultados/probabilidades/figuras
+python scripts/treinar_rede_temporal.py --seed 0 --resultados artifacts/resultados/probabilidades --figuras artifacts/resultados/probabilidades/figuras
+python scripts/gerar_figuras_resultados.py --apenas-cdf
+```
+
+A rede temporal carrega ~4,4 GB em RAM (~45 s); com a CPU dividida entre os treinos, foram medidos 43–45 min por seed. `rodar_rede_neural.py` roda 3 execuções de cada versão (`--versoes`, `--execucoes` para reduzir) e só escreve em `artifacts/resultados/`; medidos aqui, com a CPU dividida: v2 5–12 min por execução (incluindo ~3 min de cache na primeira) e v1 ~107 min (a seção da rede neural cita ~16 min sozinha, não medido aqui). No ML-04 a v1 rodou 1 vez, por tempo.
+
+### 6. Inspecionar Amostras Individuais do MM-Fi (Tarefa b)
 
 ```powershell
 python scripts/inspecionar_mmfi.py --sujeito S18 --acao A22 --quadro 120
@@ -145,6 +171,7 @@ AICT-I-WiPose/
 │   │   ├── pose3d_predicao.png      Esqueleto 3D real vs estimado
 │   │   └── confusao_s*.png          Matrizes de confusão dos baselines RF/SVM
 │   ├── resultados/                  Métricas em JSON dos baselines RF e SVM
+│   │   └── probabilidades/          Probabilidades por janela do teste (.npz) e resumo da CDF por ação
 │   └── resultados_rede_neural.json  Métricas e histórico numérico da Rede Neural
 ├── docs/
 │   ├── guia_apresentacao_professor.md Roteiro falado e guia de defesa para o professor
@@ -155,12 +182,19 @@ AICT-I-WiPose/
 ├── scripts/
 │   ├── treinar_rede.py              Pipeline de treino e ablação da Rede Neural
 │   ├── treinar_baseline.py          Treino dos baselines clássicos (RF e SVM)
+│   ├── selecionar_atributos.py      Escolha dos atributos por validação (ML-03)
+│   ├── treinar_rede_temporal.py     Treino da rede temporal própria (ML-04)
+│   ├── gerar_figuras_resultados.py  Gráficos de resultados (comparação, assinatura, por ação, CDF por ação, fase, Doppler)
+│   ├── rodar_rede_neural.py        Roda as redes neurais v1 e v2 em worktrees (ML-04)
+│   ├── comparar_modelos.py          Tabela de comparação dos modelos no S2 (ML-04)
 │   ├── inspecionar_mmfi.py          Inspeção e plot de amostras CSI/3D
 │   └── empacotar_mmfi.py            Conversor de dados para versão leve (.npz)
 ├── src/
 │   ├── rede_neural.py               Arquitetura CSISpatialSpectralTemporalNet
 │   ├── dataset_rede.py              Dataloader PyTorch vetorizado em RAM
 │   ├── atributos.py                 Extração de atributos estatísticos (ML clássico)
+│   ├── doppler.py                   Atributos de Doppler e entre antenas + cache (ML-03)
+│   ├── rede_temporal.py             Rede temporal própria: Conv1d por quadro + GRU (ML-04)
 │   ├── avaliacao.py                 Acurácia e IC bootstrap (ML clássico)
 │   ├── cache_csi.py                 Cache em disco de tensores CSI
 │   ├── protocolos.py                Splits oficiais S1 e S2
@@ -169,6 +203,7 @@ AICT-I-WiPose/
 ├── tests/
 │   ├── test_rede_neural.py          Testes da rede neural e métricas
 │   ├── test_ml01.py                 Testes dos baselines clássicos
+│   ├── test_cdf.py                  Testes das probabilidades gravadas e da CDF por ação
 │   └── test_mmfi.py                 Testes do dataset e sanitização
 ├── tema.pdf                         Enunciado oficial da disciplina
 └── requirements.txt                 Dependências do projeto

@@ -1,0 +1,244 @@
+{
+ "teste": "S2 oficial (S05, S10, …, S40; 216 sequências, 27 ações)",
+ "acaso": 0.037037037037037035,
+ "leitura": [
+  "± = desvio entre execuções (só o ruído do treino), não um teste de diferença entre modelos",
+  "IC 95% por execução só existe nos JSON do RF e da rede temporal (os da rede neural v1/v2 não gravam IC); ele reamostra sequências e ignora que elas se agrupam por sujeito (8 no teste), então é otimista",
+  "o único teste pareado é RF + Doppler × RF base (ML-03); entre os demais, a ordem é só o maior número observado, não uma classificação provada",
+  "a rede temporal treina com 28 sujeitos (4 ficam para a validação, sem retreino); os RF e as redes neurais v1 e v2 treinam com os 32 — parte da diferença pode ser quantidade de dados"
+ ],
+ "linhas": [
+  {
+   "modelo": "RF base (ML-01)",
+   "unidade": "janela de 3 s (30 quadros, 9 por sequência)",
+   "executado": true,
+   "n_execucoes": 5,
+   "n_por_janela": 5,
+   "n_por_sequencia": 5,
+   "mede_sequencia": true,
+   "por_janela": {
+    "media": 0.15504115226337448,
+    "desvio": 0.0067129136904361415,
+    "n": 5,
+    "valores": [
+     0.14506172839506173,
+     0.1574074074074074,
+     0.15895061728395063,
+     0.15174897119341563,
+     0.16203703703703703
+    ]
+   },
+   "por_sequencia": {
+    "media": 0.1814814814814815,
+    "desvio": 0.017445781186497006,
+    "n": 5,
+    "valores": [
+     0.1527777777777778,
+     0.18981481481481483,
+     0.18518518518518517,
+     0.18055555555555555,
+     0.19907407407407407
+    ]
+   },
+   "como_e_escolhido": "hiperparâmetros fixos do ML-01; sem épocas",
+   "escolhido_sem_olhar_o_teste": "sim",
+   "seed_controlada": true,
+   "fonte": "selecao_atributos.json",
+   "notas": [],
+   "detalhes": {
+    "seeds": [
+     0,
+     1,
+     2,
+     3,
+     4
+    ],
+    "atributos": "base"
+   }
+  },
+  {
+   "modelo": "RF + Doppler (ML-03)",
+   "unidade": "janela de 3 s (30 quadros, 9 por sequência)",
+   "executado": true,
+   "n_execucoes": 5,
+   "n_por_janela": 5,
+   "n_por_sequencia": 5,
+   "mede_sequencia": true,
+   "por_janela": {
+    "media": 0.1903292181069959,
+    "desvio": 0.0027461621018599045,
+    "n": 5,
+    "valores": [
+     0.18930041152263374,
+     0.18724279835390947,
+     0.19393004115226337,
+     0.19238683127572018,
+     0.18878600823045266
+    ]
+   },
+   "por_sequencia": {
+    "media": 0.23796296296296293,
+    "desvio": 0.01114962460999287,
+    "n": 5,
+    "valores": [
+     0.25,
+     0.24537037037037038,
+     0.2222222222222222,
+     0.24074074074074073,
+     0.23148148148148148
+    ]
+   },
+   "como_e_escolhido": "conjunto de atributos (base,dop_amp,dop_cm) escolhido na validação (S04/S14/S24/S34)",
+   "escolhido_sem_olhar_o_teste": "sim, pela validação (as 5 candidatas vieram de um protótipo que olhou o teste)",
+   "seed_controlada": true,
+   "fonte": "selecao_atributos.json",
+   "notas": [],
+   "detalhes": {
+    "seeds": [
+     0,
+     1,
+     2,
+     3,
+     4
+    ],
+    "atributos": "base,dop_amp,dop_cm"
+   }
+  },
+  {
+   "modelo": "Rede temporal (ML-04)",
+   "unidade": "janela de 3 s (30 quadros, 9 por sequência)",
+   "executado": true,
+   "n_execucoes": 3,
+   "n_por_janela": 3,
+   "n_por_sequencia": 3,
+   "mede_sequencia": true,
+   "por_janela": {
+    "media": 0.1332304526748971,
+    "desvio": 0.00623680846346818,
+    "n": 3,
+    "valores": [
+     0.13991769547325103,
+     0.13220164609053497,
+     0.12757201646090535
+    ]
+   },
+   "por_sequencia": {
+    "media": 0.1419753086419753,
+    "desvio": 0.017527494894445286,
+    "n": 3,
+    "valores": [
+     0.16203703703703703,
+     0.12962962962962962,
+     0.13425925925925927
+    ]
+   },
+   "como_e_escolhido": "época escolhida pela acurácia por sequência na validação (S04/S14/S24/S34); treina com 28 sujeitos, sem retreino com os 32; teste avaliado uma vez",
+   "escolhido_sem_olhar_o_teste": "sim",
+   "seed_controlada": true,
+   "fonte": "rede_temporal_s2_seed<seed>.json",
+   "notas": [],
+   "detalhes": {
+    "seeds": [
+     0,
+     1,
+     2
+    ],
+    "epocas_escolhidas": [
+     9,
+     10,
+     13
+    ]
+   }
+  },
+  {
+   "modelo": "Rede neural v1 — CNN multitarefa, quadro de 100 ms (main, 98a1f49)",
+   "unidade": "quadro de 100 ms (1 a cada 20, 15 por sequência)",
+   "executado": true,
+   "n_execucoes": 1,
+   "n_por_janela": 1,
+   "n_por_sequencia": null,
+   "mede_sequencia": false,
+   "por_janela": {
+    "media": 0.061419753086419754,
+    "desvio": null,
+    "n": 1,
+    "valores": [
+     0.061419753086419754
+    ]
+   },
+   "por_sequencia": null,
+   "como_e_escolhido": "última época (15), fixa; mede só por quadro",
+   "escolhido_sem_olhar_o_teste": "parcial — reporta a última época (nº fixado antes), mas não há validação: o script mostra o teste a cada época e o nº de épocas/hiperparâmetros foi definido pelo autor",
+   "seed_controlada": false,
+   "fonte": "rede_neural_v1_exec<i>.json",
+   "notas": [
+    "1 execução(ões) em vez de 3, por decisão do usuário (tempo): a execução dividiu a CPU com a rede temporal e levou ~107 min (origem.tempo_total_s); sem controle de seed, execuções extras mediriam só o ruído do treino"
+   ],
+   "detalhes": {
+    "commits": [
+     "98a1f49a64ab3439f41c3d16f19f244face10b92"
+    ],
+    "comandos": [
+     "python scripts/treinar_rede.py --split S2 --protocolo P3 --epocas 15 --batch-size 32 --stride 20"
+    ],
+    "contorno_execucao": null,
+    "tempo_total_s": [
+     6394.2
+    ]
+   }
+  },
+  {
+   "modelo": "Rede neural v2 — MLP sobre atributos de 3 s (rede-neural-sml, 68d96a9)",
+   "unidade": "janela de 3 s (30 quadros, 9 por sequência)",
+   "executado": true,
+   "n_execucoes": 3,
+   "n_por_janela": 3,
+   "n_por_sequencia": 3,
+   "mede_sequencia": true,
+   "por_janela": {
+    "media": 0.15603566529492455,
+    "desvio": 0.001806524991915763,
+    "n": 3,
+    "valores": [
+     0.15432098765432098,
+     0.1558641975308642,
+     0.15792181069958847
+    ]
+   },
+   "por_sequencia": {
+    "media": 0.18209876543209877,
+    "desvio": 0.013364589564574682,
+    "n": 3,
+    "valores": [
+     0.18981481481481483,
+     0.16666666666666666,
+     0.18981481481481483
+    ]
+   },
+   "como_e_escolhido": "última época (25), fixa",
+   "escolhido_sem_olhar_o_teste": "parcial — reporta a última época (nº fixado antes), mas não há validação: o script mostra o teste a cada época e o nº de épocas/hiperparâmetros foi definido pelo autor",
+   "seed_controlada": true,
+   "fonte": "rede_neural_v2_exec<i>.json",
+   "notas": [],
+   "detalhes": {
+    "commits": [
+     "68d96a9e20ae5e4d1fb3272eb9e283fce3962a1e"
+    ],
+    "comandos": [
+     "python scripts/treinar_rede.py --split S2 --protocolo P3 --seed 0",
+     "python scripts/treinar_rede.py --split S2 --protocolo P3 --seed 1",
+     "python scripts/treinar_rede.py --split S2 --protocolo P3 --seed 2"
+    ],
+    "contorno_execucao": "Optional de typing posto em builtins antes de rodar o script (via runpy), porque ele o usa sem importar; o arquivo dele não foi editado",
+    "tempo_total_s": [
+     306.4,
+     732.0,
+     544.7
+    ]
+   }
+  }
+ ],
+ "avisos": [],
+ "tabela_markdown": "| Modelo | Unidade | Acurácia por janela/quadro (%) | Acurácia por sequência (%) | Execuções | Seed controlada | Como o número é escolhido | Sem olhar o teste? |\n|---|---|---|---|---|---|---|---|\n| RF base (ML-01) | janela de 3 s (30 quadros, 9 por sequência) | 15.5 ± 0.7 | 18.1 ± 1.7 | 5 | sim | hiperparâmetros fixos do ML-01; sem épocas | sim |\n| RF + Doppler (ML-03) | janela de 3 s (30 quadros, 9 por sequência) | 19.0 ± 0.3 | 23.8 ± 1.1 | 5 | sim | conjunto de atributos (base,dop_amp,dop_cm) escolhido na validação (S04/S14/S24/S34) | sim, pela validação (as 5 candidatas vieram de um protótipo que olhou o teste) |\n| Rede temporal (ML-04) | janela de 3 s (30 quadros, 9 por sequência) | 13.3 ± 0.6 | 14.2 ± 1.8 | 3 | sim | época escolhida pela acurácia por sequência na validação (S04/S14/S24/S34); treina com 28 sujeitos, sem retreino com os 32; teste avaliado uma vez | sim |\n| Rede neural v1 — CNN multitarefa, quadro de 100 ms (main, 98a1f49) | quadro de 100 ms (1 a cada 20, 15 por sequência) | 6.1 | — | 1 (nota 1) | não | última época (15), fixa; mede só por quadro | parcial — reporta a última época (nº fixado antes), mas não há validação: o script mostra o teste a cada época e o nº de épocas/hiperparâmetros foi definido pelo autor |\n| Rede neural v2 — MLP sobre atributos de 3 s (rede-neural-sml, 68d96a9) | janela de 3 s (30 quadros, 9 por sequência) | 15.6 ± 0.2 | 18.2 ± 1.3 | 3 | sim | última época (25), fixa | parcial — reporta a última época (nº fixado antes), mas não há validação: o script mostra o teste a cada época e o nº de épocas/hiperparâmetros foi definido pelo autor |\n| Acaso (1/27) | — | 3.7 | 3.7 | — | — | — | — |\n\nNota 1: 1 execução(ões) em vez de 3, por decisão do usuário (tempo): a execução dividiu a CPU com a rede temporal e levou ~107 min (origem.tempo_total_s); sem controle de seed, execuções extras mediriam só o ruído do treino.\n\nLeitura: ± = desvio entre execuções (só o ruído do treino), não um teste de diferença entre modelos.\nLeitura: IC 95% por execução só existe nos JSON do RF e da rede temporal (os da rede neural v1/v2 não gravam IC); ele reamostra sequências e ignora que elas se agrupam por sujeito (8 no teste), então é otimista.\nLeitura: o único teste pareado é RF + Doppler × RF base (ML-03); entre os demais, a ordem é só o maior número observado, não uma classificação provada.\nLeitura: a rede temporal treina com 28 sujeitos (4 ficam para a validação, sem retreino); os RF e as redes neurais v1 e v2 treinam com os 32 — parte da diferença pode ser quantidade de dados.",
+ "data": "2026-11-11 00:42:39"
+}

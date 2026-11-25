@@ -11,6 +11,9 @@ Duas visões, sempre reportadas juntas:
 
 O intervalo de confiança é **sempre por bootstrap de sequências**: reamostrar
 janelas trataria como independentes amostras que não são, e estreitaria o IC.
+
+As probabilidades por janela podem ser gravadas (``salvar_probabilidades``) para
+análises posteriores, como a CDF da probabilidade da ação correta, por ação.
 """
 
 from pathlib import Path
@@ -105,6 +108,72 @@ def avaliar(
         },
         "acaso": 1.0 / n_classes,
     }
+
+
+def salvar_probabilidades(
+    caminho: Union[str, Path],
+    probabilidades: np.ndarray,
+    y: np.ndarray,
+    grupos: np.ndarray,
+    acoes: Sequence[str],
+    sequencias: Sequence[Tuple[str, str]],
+) -> Path:
+    """Grava a saída do modelo por janela, para análises que a métrica resumida perde.
+
+    É a entrada de ``avaliar`` mais os nomes: ``grupos`` indexa ``sequencias``
+    (``(sujeito, ação)``), e ``y`` indexa ``acoes``. Com isso dá para refazer
+    qualquer métrica (por janela, por sequência, por ação, por pessoa) e a CDF
+    por ação, sem treinar de novo. float32 basta: ~200 KB para o teste S2.
+    """
+    probabilidades = np.asarray(probabilidades)
+    y = np.asarray(y)
+    grupos = np.asarray(grupos)
+    if not (len(probabilidades) == len(y) == len(grupos)):
+        raise ValueError("probabilidades, y e grupos precisam ter o mesmo número de janelas.")
+    if probabilidades.shape[1] != len(acoes):
+        raise ValueError("Uma coluna de probabilidade por ação.")
+    if grupos.size and (grupos.min() < 0 or grupos.max() >= len(sequencias)):
+        raise ValueError("grupos fora do intervalo de sequencias.")
+    caminho = Path(caminho)
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        caminho,
+        probabilidades=probabilidades.astype(np.float32),
+        y=y.astype(np.int64),
+        grupos=grupos.astype(np.int64),
+        acoes=np.asarray(list(acoes), dtype=str),
+        sequencias=np.asarray([list(s) for s in sequencias], dtype=str).reshape(-1, 2),
+    )
+    return caminho
+
+
+def carregar_probabilidades(caminho: Union[str, Path]) -> Dict[str, np.ndarray]:
+    """Lê o arquivo de ``salvar_probabilidades`` (sem pickle)."""
+    with np.load(caminho, allow_pickle=False) as dados:
+        return {chave: dados[chave] for chave in dados.files}
+
+
+def probabilidade_da_correta(probabilidades: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Probabilidade que o modelo deu à ação verdadeira, uma por amostra.
+
+    É a "confiança no acerto": perto de 1, o modelo tem certeza da ação certa;
+    perto de 0, ele aposta em outra. Diferente do acerto (0/1), mostra também
+    quanto faltou quando ele erra.
+    """
+    probabilidades = np.asarray(probabilidades)
+    y = np.asarray(y)
+    return probabilidades[np.arange(len(y)), y]
+
+
+def cdf_empirica(valores: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """CDF empírica: ``(x ordenado, F(x))``, com ``F(x) = fração de valores ≤ x``.
+
+    Para desenhar em degraus (``where="post"``), começando em 0.
+    """
+    x = np.sort(np.asarray(valores, dtype=np.float64).ravel())
+    if x.size == 0:
+        raise ValueError("Sem valores para a CDF.")
+    return x, np.arange(1, x.size + 1) / x.size
 
 
 def salvar_matriz_confusao(

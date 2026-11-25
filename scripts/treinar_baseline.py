@@ -9,14 +9,39 @@ por bootstrap de sequências, contra a linha do acaso.
 Uso:
     .venv/Scripts/python.exe scripts/treinar_baseline.py --protocolo s2 --modelo rf
     .venv/Scripts/python.exe scripts/treinar_baseline.py --protocolo s1 --modelo svm --seed 1
+    .venv/Scripts/python.exe scripts/treinar_baseline.py --protocolo s2 --normalizacao zscore --diagnostico-sujeito
+    .venv/Scripts/python.exe scripts/treinar_baseline.py --protocolo s2 --atributos base,dop_amp,dop_cm
 
 Na primeira execução o cache do CSI é construído em artifacts/cache/ (~9 GB em
 disco, alguns minutos). As seguintes o reaproveitam.
 
-Saídas, com <sufixo> = <protocolo>_<modelo>[_<acoes>]_j<janela>_p<passo>_seed<seed>:
+Opções do ML-02 (experimento; o padrão não muda nada em relação ao ML-01):
+    --normalizacao nenhuma|media|zscore   normaliza cada sequência antes do
+                                          janelamento (ver src/atributos.py)
+    --diagnostico-sujeito                 mede quanto os atributos identificam o
+                                          sujeito (RF no split S1, acaso 1/40)
+
+Opção do ML-03 (o padrão, ``base``, não muda nada em relação ao ML-01/02):
+    --atributos base,antenas,dop_amp,dop_cm   conjuntos de atributos por janela,
+                                          concatenados na ordem dada (ver
+                                          src/doppler.py). Os três além de
+                                          ``base`` vêm de um cache próprio em
+                                          artifacts/cache_atributos/ (~6 min na
+                                          primeira vez; relê o dataset).
+                                          ``--refazer`` reconstrói também esse cache.
+                                          A normalização vale só para ``base``.
+
+Saídas, com <sufixo> = <protocolo>_<modelo>[_<acoes>]_j<janela>_p<passo>_seed<seed>[_n<modo>][_a<conjuntos>]
+(``_n<modo>`` só quando a normalização não é ``nenhuma``; ``_a<conjuntos>``,
+com os conjuntos unidos por ``-``, só quando não é só ``base``):
     artifacts/resultados/baseline_<sufixo>.json
+    artifacts/resultados/probabilidades_baseline_<sufixo>.npz   saída por janela
+                                                  (ver src/avaliacao.salvar_probabilidades)
     artifacts/figuras/confusao_<sufixo>.png       matriz por janela
     artifacts/figuras/confusao_<sufixo>_seq.png   matriz por sequência
+
+``--resultados`` e ``--figuras`` mudam as pastas (para uma reexecução não
+sobrescrever os resultados versionados).
 """
 
 import argparse
@@ -35,16 +60,29 @@ if hasattr(sys.stdout, "reconfigure"):
 RAIZ_PROJETO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ_PROJETO))
 
-from src.atributos import janelas_de_sequencia, montar_conjunto  # noqa: E402
-from src.avaliacao import avaliar, salvar_matriz_confusao  # noqa: E402
+from src.atributos import (  # noqa: E402
+    ATRIBUTOS_PADRAO,
+    CONJUNTOS_ATRIBUTOS,
+    MODOS_NORMALIZACAO,
+    validar_atributos,
+    janelas_de_sequencia,
+    montar_conjunto,
+)
+from src.avaliacao import (  # noqa: E402
+    avaliar,
+    ic_bootstrap,
+    salvar_matriz_confusao,
+    salvar_probabilidades,
+)
 from src.cache_csi import abrir_cache, construir_cache  # noqa: E402
+from src.doppler import abrir_cache_atributos, construir_cache_atributos  # noqa: E402
 from src.mmfi import (  # noqa: E402
     N_QUADROS,
     PROTOCOLO_1,
     PROTOCOLO_2,
     PROTOCOLO_3,
 )
-from src.protocolos import dividir_s1_agrupado, dividir_s2  # noqa: E402
+from src.protocolos import SUJEITOS, dividir_s1_agrupado, dividir_s2  # noqa: E402
 
 CONJUNTOS_DE_ACOES = {"p1": PROTOCOLO_1, "p2": PROTOCOLO_2, "p3": PROTOCOLO_3}
 
@@ -79,6 +117,91 @@ def criar_modelo(nome: str, seed: int):
     return modelo, {chave: parametros[chave] for chave in definidos}
 
 
+def montar_sufixo(protocolo: str, modelo: str, acoes: str, janela: int,
+                  passo: int, seed: int, normalizacao: str = "nenhuma",
+                  atributos=ATRIBUTOS_PADRAO) -> str:
+    """Sufixo único de JSON e figuras.
+
+    Execuções com outra janela, passo, seed, normalização ou atributos não
+    podem sobrescrever umas às outras. Sem normalização e só com ``base``, o
+    nome é o mesmo do ML-01.
+    """
+    atributos = validar_atributos(atributos)
+    return (f"{protocolo}_{modelo}"
+            + ("" if acoes == "p3" else f"_{acoes}")
+            + f"_j{janela}_p{passo}_seed{seed}"
+            + ("" if normalizacao == "nenhuma" else f"_n{normalizacao}")
+            + ("" if atributos == ATRIBUTOS_PADRAO else "_a" + "-".join(atributos)))
+
+
+def ler_atributos(texto: str):
+    """Tipo do argparse para ``--atributos``: ``"base,dop_amp"`` -> tupla validada."""
+    try:
+        return validar_atributos(texto)
+    except ValueError as erro:
+        raise argparse.ArgumentTypeError(str(erro)) from erro
+
+
+def juntar_para_diagnostico(X_tr, g_tr, treino, X_te, g_te, teste):
+    """Junta as janelas de treino e teste num só conjunto para o diagnóstico.
+
+    Devolve ``(X, grupos, sequencias)``, com ``grupos`` indexando
+    ``sequencias = treino + teste`` (os grupos do teste são deslocados de
+    ``len(treino)``). Treino ∪ teste = todas as sequências das ações, em
+    qualquer protocolo, então isso cobre o split S1 sem reler o cache.
+    """
+    X = np.concatenate([X_tr, X_te])
+    grupos = np.concatenate([g_tr, np.asarray(g_te) + len(treino)])
+    return X, grupos, list(treino) + list(teste)
+
+
+def diagnosticar_sujeito(X: np.ndarray, grupos: np.ndarray, sequencias, acoes,
+                         seed: int) -> dict:
+    """Quanto os atributos identificam o **sujeito** (a "assinatura" no canal).
+
+    ``X``/``grupos`` são as janelas de ``sequencias`` (``grupos`` indexa
+    ``sequencias``), que deve cobrir todas as sequências das ``acoes``. Treina
+    a mesma Random Forest do baseline para prever o sujeito no split S1 da
+    mesma seed — no S2 os sujeitos de teste nunca aparecem no treino, então só
+    o S1 permite medir isso. Acurácia por janela, IC 95% por bootstrap de
+    sequências e acaso 1/40.
+
+    As janelas são reordenadas numa ordem canônica (sequências ordenadas,
+    janelas na ordem original dentro de cada uma) antes do ajuste: assim a
+    mesma seed, ações e normalização dão o mesmo resultado em S1 e em S2.
+    """
+    s1_treino, s1_teste = dividir_s1_agrupado(acoes, seed=seed)
+    sequencias = [tuple(seq) for seq in sequencias]
+    ordem = sorted(range(len(sequencias)), key=lambda g: sequencias[g])
+    posto = np.empty(len(sequencias), dtype=np.int64)
+    posto[ordem] = np.arange(len(sequencias))
+    grupos = posto[np.asarray(grupos)]
+    indices = np.argsort(grupos, kind="stable")
+    X, grupos = np.asarray(X)[indices], grupos[indices]
+    sequencias = [sequencias[g] for g in ordem]
+    faltando = (set(s1_treino) | set(s1_teste)) - set(sequencias)
+    if faltando:
+        raise ValueError(f"{len(faltando)} sequências do split S1 sem atributos.")
+    no_teste = set(s1_teste)
+    seq_teste = np.array([seq in no_teste for seq in sequencias])
+    indice_sujeito = {s: i for i, s in enumerate(SUJEITOS)}
+    rotulo_seq = np.array([indice_sujeito[s] for s, _ in sequencias])
+
+    mascara = seq_teste[grupos]
+    y = rotulo_seq[grupos]
+    modelo, _ = criar_modelo("rf", seed)
+    modelo.fit(X[~mascara], y[~mascara])
+    acertos = (modelo.predict(X[mascara]) == y[mascara]).astype(np.float64)
+    baixo, alto = ic_bootstrap(acertos, grupos[mascara], seed=seed)
+    return {
+        "acuracia": float(acertos.mean()),
+        "ic95": [baixo, alto],
+        "acaso": 1.0 / len(SUJEITOS),
+        "n_janelas_teste": int(mascara.sum()),
+        "split": "s1",
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Baseline de classificação de ações (MM-Fi)")
     parser.add_argument("--protocolo", choices=("s1", "s2"), default="s2",
@@ -91,7 +214,26 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--raiz", default=None, help="Caminho do MM-Fi (padrão: MMFI_DATASET)")
     parser.add_argument("--cache", default=str(RAIZ_PROJETO / "artifacts" / "cache"))
-    parser.add_argument("--refazer", action="store_true", help="Reconstrói o cache do zero")
+    parser.add_argument("--refazer", action="store_true",
+                        help="Reconstrói o cache do CSI do zero e, se --atributos pedir "
+                             "conjuntos além de base, também o cache de atributos")
+    parser.add_argument("--normalizacao", choices=MODOS_NORMALIZACAO, default="nenhuma",
+                        help="normalização por sequência antes do janelamento "
+                             "(experimento ML-02; padrão: nenhuma)")
+    parser.add_argument("--diagnostico-sujeito", action="store_true",
+                        help="mede quanto os atributos identificam o sujeito "
+                             "(RF no split S1 da mesma seed; acaso 1/40)")
+    parser.add_argument("--atributos", type=ler_atributos, default=ATRIBUTOS_PADRAO,
+                        help="conjuntos separados por vírgula, concatenados nessa ordem "
+                             f"({', '.join(CONJUNTOS_ATRIBUTOS)}; padrão: base). "
+                             "Experimento ML-03")
+    parser.add_argument("--cache-atributos",
+                        default=str(RAIZ_PROJETO / "artifacts" / "cache_atributos"),
+                        help="cache dos atributos de Doppler/antenas")
+    parser.add_argument("--resultados", default=str(RAIZ_PROJETO / "artifacts" / "resultados"),
+                        help="pasta do JSON e das probabilidades")
+    parser.add_argument("--figuras", default=str(RAIZ_PROJETO / "artifacts" / "figuras"),
+                        help="pasta das matrizes de confusão")
     args = parser.parse_args()
 
     try:
@@ -102,12 +244,18 @@ def main() -> int:
 
     inicio = time.time()
     print(f"--> Cache do CSI em: {args.cache}")
+    cache_atributos = None
     try:
         construir_cache(args.cache, args.raiz, refazer=args.refazer)
-    except FileNotFoundError as erro:
+        amp, fase, linhas = abrir_cache(args.cache)
+        if args.atributos != ATRIBUTOS_PADRAO:
+            print(f"--> Cache de atributos (Doppler/antenas) em: {args.cache_atributos}")
+            construir_cache_atributos(args.cache_atributos, args.raiz, args.janela,
+                                      args.passo, refazer=args.refazer)
+            cache_atributos = abrir_cache_atributos(args.cache_atributos)
+    except (FileNotFoundError, ValueError) as erro:
         print(f"ERRO: {erro}")
         return 1
-    amp, fase, linhas = abrir_cache(args.cache)
 
     acoes = tuple(sorted(CONJUNTOS_DE_ACOES[args.acoes]))
     if args.protocolo == "s1":
@@ -119,9 +267,16 @@ def main() -> int:
           f"({len(acoes)} ações): {len(treino)} sequências de treino, "
           f"{len(teste)} de teste")
 
-    print(f"--> Extraindo atributos (janela={args.janela}, passo={args.passo or args.janela})")
-    X_tr, y_tr, _ = montar_conjunto(amp, fase, linhas, treino, acoes, args.janela, args.passo)
-    X_te, y_te, g_te = montar_conjunto(amp, fase, linhas, teste, acoes, args.janela, args.passo)
+    print(f"--> Extraindo atributos (janela={args.janela}, passo={args.passo or args.janela}, "
+          f"normalização={args.normalizacao}, atributos={','.join(args.atributos)})")
+    X_tr, y_tr, g_tr = montar_conjunto(amp, fase, linhas, treino, acoes, args.janela,
+                                       args.passo, normalizacao=args.normalizacao,
+                                       atributos=args.atributos,
+                                       cache_atributos=cache_atributos)
+    X_te, y_te, g_te = montar_conjunto(amp, fase, linhas, teste, acoes, args.janela,
+                                       args.passo, normalizacao=args.normalizacao,
+                                       atributos=args.atributos,
+                                       cache_atributos=cache_atributos)
     print(f"    treino {X_tr.shape}, teste {X_te.shape}")
 
     print(f"--> Treinando {args.modelo.upper()} (seed={args.seed})")
@@ -136,7 +291,20 @@ def main() -> int:
     proba[:, modelo.classes_] = proba_parcial
 
     metricas = avaliar(proba, y_te, g_te, len(acoes), seed=args.seed)
+    # Total do baseline, sem o diagnóstico: comparável ao do ML-01.
     tempo_total = time.time() - inicio
+
+    identificacao = None
+    tempo_diagnostico = None
+    if args.diagnostico_sujeito:
+        # Treino ∪ teste = todas as sequências das ações, em qualquer protocolo:
+        # os atributos já montados cobrem o split S1 sem reler o cache.
+        print(f"--> Diagnóstico: identificação do sujeito (RF, split S1, seed={args.seed})")
+        t0 = time.time()
+        X_todas, g_todas, seq_todas = juntar_para_diagnostico(
+            X_tr, g_tr, treino, X_te, g_te, teste)
+        identificacao = diagnosticar_sujeito(X_todas, g_todas, seq_todas, acoes, args.seed)
+        tempo_diagnostico = time.time() - t0
 
     acaso = metricas["acaso"]
     print("\n=== Resultado ===")
@@ -147,16 +315,19 @@ def main() -> int:
               f"IC95% [{100 * baixo:5.1f}, {100 * alto:5.1f}]  "
               f"F1 macro {m['f1_macro']:.3f}  (n={m['n']})")
     print(f"  acaso (1/{len(acoes)})        : {100 * acaso:5.1f}%")
-    print(f"  tempo: treino {tempo_treino:.0f} s, total {tempo_total:.0f} s")
+    if identificacao is not None:
+        baixo, alto = identificacao["ic95"]
+        print(f"  identificação do sujeito: {100 * identificacao['acuracia']:5.1f}%  "
+              f"IC95% [{100 * baixo:5.1f}, {100 * alto:5.1f}]  "
+              f"acaso (1/{len(SUJEITOS)}) {100 * identificacao['acaso']:.1f}%")
+    print(f"  tempo: treino {tempo_treino:.0f} s, total {tempo_total:.0f} s"
+          + ("" if tempo_diagnostico is None else f", diagnóstico {tempo_diagnostico:.0f} s"))
 
     import sklearn
 
     passo = args.passo or args.janela
-    # Um sufixo só para JSON e figuras: execuções com outra janela, passo ou
-    # seed não podem sobrescrever umas às outras.
-    sufixo = (f"{args.protocolo}_{args.modelo}"
-              + ("" if args.acoes == "p3" else f"_{args.acoes}")
-              + f"_j{args.janela}_p{passo}_seed{args.seed}")
+    sufixo = montar_sufixo(args.protocolo, args.modelo, args.acoes, args.janela,
+                           passo, args.seed, args.normalizacao, args.atributos)
     resultado = {
         "protocolo": args.protocolo,
         "modelo": args.modelo,
@@ -164,6 +335,9 @@ def main() -> int:
         "janela": args.janela,
         "passo": passo,
         "seed": args.seed,
+        "normalizacao": args.normalizacao,
+        "atributos": list(args.atributos),
+        "n_atributos": int(X_tr.shape[1]),
         "hiperparametros": hiperparametros,
         "versoes": {
             "sklearn": sklearn.__version__,
@@ -174,23 +348,34 @@ def main() -> int:
         "n_janelas": {"treino": int(len(X_tr)), "teste": int(len(X_te))},
         "sequencias_teste": [list(s) for s in teste],
         "metricas": metricas,
-        "tempo_s": {"treino": round(tempo_treino, 1), "total": round(tempo_total, 1)},
+        **({"identificacao_sujeito": identificacao} if identificacao is not None else {}),
+        "tempo_s": {"treino": round(tempo_treino, 1), "total": round(tempo_total, 1),
+                    **({} if tempo_diagnostico is None
+                       else {"diagnostico": round(tempo_diagnostico, 1)})},
         "data": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    pasta_resultados = RAIZ_PROJETO / "artifacts" / "resultados"
+    pasta_resultados = Path(args.resultados)
     pasta_resultados.mkdir(parents=True, exist_ok=True)
     arquivo_json = pasta_resultados / f"baseline_{sufixo}.json"
     arquivo_json.write_text(json.dumps(resultado, ensure_ascii=False, indent=1), encoding="utf-8")
+    arquivo_proba = salvar_probabilidades(
+        pasta_resultados / f"probabilidades_baseline_{sufixo}.npz",
+        proba, y_te, g_te, acoes, teste)
 
     print(f"\n--> Métricas: {arquivo_json}")
-    pasta_figuras = RAIZ_PROJETO / "artifacts" / "figuras"
+    print(f"--> Probabilidades por janela: {arquivo_proba}")
+    pasta_figuras = Path(args.figuras)
+    rotulo_norm = ("" if args.normalizacao == "nenhuma"
+                   else f" — normalização {args.normalizacao}")
+    if args.atributos != ATRIBUTOS_PADRAO:
+        rotulo_norm += f" — atributos {'+'.join(args.atributos)}"
     for visao, nome, final in (("por_janela", "por janela", ""),
                                ("por_sequencia", "por sequência", "_seq")):
         m = metricas[visao]
         figura = salvar_matriz_confusao(
             np.array(m["confusao"]), acoes,
             pasta_figuras / f"confusao_{sufixo}{final}.png",
-            titulo=(f"{args.modelo.upper()} — protocolo {args.protocolo.upper()} — {nome} "
+            titulo=(f"{args.modelo.upper()} — protocolo {args.protocolo.upper()}{rotulo_norm} — {nome} "
                     f"(acurácia {100 * m['acuracia']:.1f}%, acaso {100 * acaso:.1f}%)"),
         )
         print(f"--> Matriz de confusão ({nome}): {figura}")
